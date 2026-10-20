@@ -70,6 +70,21 @@ android {
         abiFilters 'armeabi-v7a', 'x86'
       }
     }
+    haebang {
+      // 해방툴 · HB런처용 비공식 빌드 — 공식 RetroArch 와 나란히 깔리도록 패키지 이름이 다르다.
+      // 코어 확인 · 받기 다리는 haebang/ 폴더(CoreBridgeProvider). 자세한 것은 haebang/README.md.
+      applicationId 'com.haebang.retroarch'
+      minSdkVersion 21
+      versionName "${getManifestAttribute("versionName")}-hb1"
+      resValue "string", "app_name", "HB RetroArch"
+      buildConfigField "boolean", "PLAY_STORE_BUILD", "false"
+
+      // 통합판: 64비트 기기는 arm64 로, 32비트 전용 기기는 armeabi-v7a 로 깔린다(한 앱은 한 ABI 로만 돈다). x86 계열은 뺌.
+      dimension "variant"
+      ndk {
+        abiFilters 'arm64-v8a', 'armeabi-v7a'
+      }
+    }
     playStoreNormal {
       minSdkVersion 21
       targetSdkVersion 35
@@ -113,6 +128,11 @@ android {
     }
     ra32 {
       java.srcDirs += ['../play-core-stub']
+    }
+    haebang {
+      java.srcDirs += ['../play-core-stub', 'haebang/src']
+      res.srcDirs = ['haebang/res']
+      manifest.srcFile 'haebang/AndroidManifest.xml'
     }
     playStoreNormal {
       java.srcDirs += ['../play-core-impl']

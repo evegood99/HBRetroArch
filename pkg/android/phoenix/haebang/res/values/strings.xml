@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="hb_core_channel">Core downloads</string>
+    <string name="hb_core_preparing">Preparing core download…</string>
+    <string name="hb_core_downloading">Downloading core %1$s… %2$d%%</string>
+    <string name="hb_core_installing">Installing core %1$s…</string>
+    <string name="hb_core_done">Core %1$s installed</string>
+    <string name="hb_core_failed">Core %1$s failed: %2$s</string>
+    <string name="hb_perm_manage_cores">Install or remove RetroArch cores</string>
+</resources>

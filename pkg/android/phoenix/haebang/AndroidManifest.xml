@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- haebang 맛(flavor)에만 더해지는 부분 — 본 AndroidManifest.xml 위에 합쳐진다. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.retroarch">
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!-- install_file · delete 를 셸 밖에서 부를 앱(같은 열쇠로 서명한 앱)에게 주는 권한 -->
+    <permission
+        android:name="${applicationId}.permission.MANAGE_CORES"
+        android:label="@string/hb_perm_manage_cores"
+        android:protectionLevel="signature" />
+
+    <application>
+        <provider
+            android:name="com.haebang.retroarch.CoreBridgeProvider"
+            android:authorities="${applicationId}.cores"
+            android:exported="true" />
+
+        <service
+            android:name="com.haebang.retroarch.CoreInstallService"
+            android:exported="false" />
+    </application>
+</manifest>
