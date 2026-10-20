@@ -1,6 +1,6 @@
 # HB RetroArch — 코어 브릿지를 넣은 RetroArch 안드로이드 빌드
 
-공식 RetroArch(libretro/RetroArch) 안드로이드 판에 **바깥에서 코어를 보고 받는 코어 브릿지**를 더한 비공식 빌드.
+공식 RetroArch(libretro/RetroArch) 안드로이드 빌드에 **바깥에서 코어를 보고 받는 코어 브릿지**를 더한 비공식 빌드.
 해방툴(PC, adb)과 HB런처(기기 안 앱)가 게임을 넣기 전에 코어가 있는지 확인하고, 없으면 바로 받게 하려는 것이다.
 
 - 저장소: <https://github.com/evegood99/HBRetroArch> (가지 `haebang`, libretro/RetroArch 포크)
@@ -37,7 +37,7 @@ python haebang\build.py
 - 도구는 공식 CI 와 같다: **JDK 11**(`%USERPROFILE%\.jdks\jdk-11…`, `HB_JDK11` 로 바꿈) · Gradle 6.7.1(wrapper) · AGP 4.2 · **NDK 22.0.7026061**(`%LOCALAPPDATA%\Android\Sdk\ndk\`).
   Gradle 6.7 은 JDK 17 에서 안 돈다.
 - **assets**(메뉴 그림 · 코어 정보 · 셰이더 · 오버레이 · 패드 설정)는 저장소에 없다 — 공식 빌드 서버가 따로 넣는다.
-  `build.py` 가 같은 판 공식 APK(`buildbot.libretro.com/stable/1.22.2/android/RetroArch_aarch64.apk`)에서 풀어 `pkg/android/phoenix/assets/` 에 둔다.
+  `build.py` 가 같은 버전 공식 APK(`buildbot.libretro.com/stable/1.22.2/android/RetroArch_aarch64.apk`)에서 풀어 `pkg/android/phoenix/assets/` 에 둔다.
 - 서명 열쇠는 처음 빌드 때 `haebang/keystore/` 에 만든다(git 미추적). **잃으면 기기에서 업데이트가 안 된다**(지우고 다시 깔아야 함) — 백업할 것.
 - ABI 는 `arm64-v8a` + `armeabi-v7a` 통합판(x86 계열은 뺌). 앱은 설치 때 정해진 **한 ABI 로만** 돈다 —
   64비트 기기는 arm64, 32비트 전용 기기는 armeabi-v7a(`adb install --abi armeabi-v7a` 로 64비트 기기에 32비트로 깔 수도 있다).
@@ -124,7 +124,7 @@ am start -n com.haebang.retroarch/com.retroarch.browser.retroactivity.RetroActiv
 `retroarch.cfg` 의 `core_updater_buildbot_cores_url` 을 따르지 않는다. 그 파일은 `Android/data/…` 에 있어 옛 안드로이드에서는 저장소 권한만 있는 다른 앱도 고칠 수 있다 —
 그 값을 따르면 바깥 호출 한 번으로 남이 만든 .so 가 RetroArch 안에서 돌게 된다. `install_file` 을 셸 · 같은 서명으로만 연 것도 같은 까닭이다.
 
-## 새 업스트림 판으로 올리기
+## 새 업스트림 버전으로 올리기
 
 ```sh
 git remote add upstream https://github.com/libretro/RetroArch.git   # 한 번만
@@ -133,11 +133,11 @@ git rebase --onto v1.23.0 v1.22.2 haebang   # 고친 업스트림 파일은 buil
 git push --force-with-lease origin haebang
 ```
 
-`haebang/build.py` 의 `UPSTREAM_VERSION` 을 바꾸면 assets 도 그 판 공식 APK 에서 다시 푼다.
+`haebang/build.py` 의 `UPSTREAM_VERSION` 을 바꾸면 assets 도 그 버전 공식 APK 에서 다시 푼다.
 
 ## 라이선스
 
 RetroArch 는 GPLv3 이다. 이 빌드를 남에게 배포하면 **고친 소스 전체를 함께 공개해야 한다** — 공개 저장소
-<https://github.com/evegood99/HBRetroArch> 가 그 자리다. 릴리스마다 그 APK 를 만든 커밋에 태그(`v<판>-hb<n>`)를 단다.
+<https://github.com/evegood99/HBRetroArch> 가 그 자리다. 릴리스마다 그 APK 를 만든 커밋에 태그(`v<버전>-hb<n>`)를 단다.
 해방툴 · HB런처는 공급자(IPC)로만 이야기하므로 그 코드까지 GPL 이 되지는 않는다. 코어는 APK 에 넣지 않고 기기가 buildbot 에서 받는다
 (코어마다 라이선스가 다르고 상업 이용을 막는 것도 있다).

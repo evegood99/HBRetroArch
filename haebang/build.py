@@ -4,7 +4,7 @@
     python haebang/build.py --skip-assets  # assets 는 이미 풀어 둔 것을 씀
 
 공식 CI 와 같은 도구를 쓴다: JDK 11 · Gradle 6.7.1(wrapper) · AGP 4.2 · NDK 22.0.7026061.
-assets(메뉴 그림 · 코어 정보 · 셰이더 …)는 저장소에 없고 공식 빌드 서버가 따로 넣으므로, 같은 판 공식 APK 에서 풀어 쓴다.
+assets(메뉴 그림 · 코어 정보 · 셰이더 …)는 저장소에 없고 공식 빌드 서버가 따로 넣으므로, 같은 버전 공식 APK 에서 풀어 쓴다.
 """
 import argparse
 import os
@@ -37,7 +37,7 @@ def log(msg):
 
 
 def ensure_assets():
-    """공식 APK 의 assets/ 를 phoenix/assets 로. 판 표식이 같으면 건너뛴다."""
+    """공식 APK 의 assets/ 를 phoenix/assets 로. 버전 표식이 같으면 건너뛴다."""
     dest = os.path.join(PHOENIX, 'assets')
     stamp = os.path.join(dest, '.hb_assets_version')
     if os.path.isfile(stamp) and open(stamp, encoding='utf-8').read().strip() == UPSTREAM_VERSION:
