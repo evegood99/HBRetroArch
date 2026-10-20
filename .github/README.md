@@ -1,6 +1,6 @@
 # HB RetroArch
 
-**RetroArch 안드로이드 비공식 빌드 — 다른 앱이 코어를 확인하고 받을 수 있는 '코어 다리'를 더했습니다.**
+**RetroArch 안드로이드 비공식 빌드 — 다른 앱이 코어를 확인하고 받을 수 있는 '코어 브릿지'를 더했습니다.**
 [해방툴(HAE-BANG Rom Setting Tools)](https://evegoodretro.com) · 해방런처(HB런처)와 함께 쓰려고 만들었습니다.
 
 > **비공식 빌드입니다.** libretro 팀과 관계가 없고 그 팀이 승인한 빌드도 아닙니다.
@@ -59,7 +59,7 @@ am start -n com.haebang.retroarch/com.retroarch.browser.retroactivity.RetroActiv
   ES-DE 를 다시 켜면 이 앱을 먼저 씁니다. 해방툴로 내보내면 자동으로 써 줍니다.
 - **Pegasus · Daijisho 등** — 실행 명령의 패키지를 `com.haebang.retroarch` 로 바꿉니다.
 
-## 코어 다리 (요약)
+## 코어 브릿지 (요약)
 
 권한(authority)은 `com.haebang.retroarch.cores` 입니다.
 

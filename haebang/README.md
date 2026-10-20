@@ -1,6 +1,6 @@
-# HB RetroArch — 코어 다리를 넣은 RetroArch 안드로이드 빌드
+# HB RetroArch — 코어 브릿지를 넣은 RetroArch 안드로이드 빌드
 
-공식 RetroArch(libretro/RetroArch) 안드로이드 판에 **바깥에서 코어를 보고 받는 다리**를 더한 비공식 빌드.
+공식 RetroArch(libretro/RetroArch) 안드로이드 판에 **바깥에서 코어를 보고 받는 코어 브릿지**를 더한 비공식 빌드.
 해방툴(PC, adb)과 HB런처(기기 안 앱)가 게임을 넣기 전에 코어가 있는지 확인하고, 없으면 바로 받게 하려는 것이다.
 
 - 저장소: <https://github.com/evegood99/HBRetroArch> (가지 `haebang`, libretro/RetroArch 포크)
@@ -41,10 +41,10 @@ python haebang\build.py
 - 서명 열쇠는 처음 빌드 때 `haebang/keystore/` 에 만든다(git 미추적). **잃으면 기기에서 업데이트가 안 된다**(지우고 다시 깔아야 함) — 백업할 것.
 - ABI 는 `arm64-v8a` + `armeabi-v7a` 통합판(x86 계열은 뺌). 앱은 설치 때 정해진 **한 ABI 로만** 돈다 —
   64비트 기기는 arm64, 32비트 전용 기기는 armeabi-v7a(`adb install --abi armeabi-v7a` 로 64비트 기기에 32비트로 깔 수도 있다).
-  코어도 그 ABI 것이어야 하며, 다리는 실제 ABI(`info.abi`)에 맞는 buildbot 폴더에서 받는다.
+  코어도 그 ABI 것이어야 하며, 코어 브릿지는 실제 ABI(`info.abi`)에 맞는 buildbot 폴더에서 받는다.
 - targetSdk 28 은 공식 웹 배포판과 같다(앱 폴더 코어 로드 · 옛 저장소 권한).
 
-## 다리 API (api_version 1)
+## 코어 브릿지 API (api_version 1)
 
 권한(authority): `com.haebang.retroarch.cores`
 

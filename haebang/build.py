@@ -1,4 +1,4 @@
-"""HB RetroArch(코어 다리를 넣은 RetroArch 안드로이드) 빌드.
+"""HB RetroArch(코어 브릿지를 넣은 RetroArch 안드로이드) 빌드.
 
     python haebang/build.py                # assets 준비 → 서명 열쇠(없으면 만듦) → assembleHaebangRelease → haebang/out/
     python haebang/build.py --skip-assets  # assets 는 이미 풀어 둔 것을 씀

@@ -72,7 +72,7 @@ android {
     }
     haebang {
       // 해방툴 · HB런처용 비공식 빌드 — 공식 RetroArch 와 나란히 깔리도록 패키지 이름이 다르다.
-      // 코어 확인 · 받기 다리는 haebang/ 폴더(CoreBridgeProvider). 자세한 것은 haebang/README.md.
+      // 코어 확인 · 받기 코어 브릿지는 haebang/ 폴더(CoreBridgeProvider). 자세한 것은 haebang/README.md.
       applicationId 'com.haebang.retroarch'
       minSdkVersion 21
       versionName "${getManifestAttribute("versionName")}-hb1"

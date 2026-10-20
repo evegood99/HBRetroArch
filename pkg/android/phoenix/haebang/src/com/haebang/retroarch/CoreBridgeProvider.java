@@ -23,7 +23,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 바깥(해방툴의 adb · HB런처 같은 기기 안 앱)이 코어를 보고 받게 하는 다리.
+ * 바깥(해방툴의 adb · HB런처 같은 기기 안 앱)이 코어를 보고 받게 하는 코어 브릿지.
  *
  * 읽기 — content://<패키지>.cores/{info|cores|jobs|available}
  *   ?core=snes9x  한 코어만 · ?format=json  한 줄 'json' 칸에 JSON 으로 · ?refresh=1  (available) 목록을 지금 받음
