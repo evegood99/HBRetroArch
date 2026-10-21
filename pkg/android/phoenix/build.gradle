@@ -75,7 +75,7 @@ android {
       // 코어 확인 · 받기 코어 브릿지는 haebang/ 폴더(CoreBridgeProvider). 자세한 것은 haebang/README.md.
       applicationId 'com.haebang.retroarch'
       minSdkVersion 21
-      versionName "${getManifestAttribute("versionName")}-hb2"
+      versionName "${getManifestAttribute("versionName")}-hb3"
       resValue "string", "app_name", "HB RetroArch"
       buildConfigField "boolean", "PLAY_STORE_BUILD", "false"
 

@@ -108,8 +108,12 @@ python haebang\build.py        # → haebang\out\HBRetroArch-1.22.2-<hb 번호>.
 - 메뉴 그림 · 코어 정보 · 셰이더 같은 assets 는 RetroArch 저장소에 없습니다. `build.py` 가 같은 버전 공식 APK 에서 풀어 넣습니다.
 - 서명 열쇠는 처음 빌드할 때 `haebang/keystore/` 에 만듭니다. git 에는 올리지 않습니다.
 
-고친 업스트림 파일은 `pkg/android/phoenix/build.gradle`(맛 `haebang`)과 `input/drivers/android_input.c`(동시 입력)입니다.
-나머지는 새 폴더 `pkg/android/phoenix/haebang/` 과 `haebang/` 에 있습니다.
+고친 업스트림 파일은 셋입니다.
+- `pkg/android/phoenix/build.gradle` — 맛 `haebang`
+- `input/drivers/android_input.c` — 동시 입력
+- `MainMenuActivity.java` — 안드로이드 13+ 에서 아이콘으로 켤 때 알림 허용 창이 덮여 매번 다시 뜨던 것
+
+나머지는 새 파일입니다. 대부분은 `pkg/android/phoenix/haebang/` 과 `haebang/` 에 있고, `NotificationPromptGate.java` 만 `MainMenuActivity.java` 옆에 있습니다.
 
 ## 업스트림 따라가기
 

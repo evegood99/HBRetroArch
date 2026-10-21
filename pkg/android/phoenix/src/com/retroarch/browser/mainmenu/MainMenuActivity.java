@@ -30,6 +30,7 @@ public final class MainMenuActivity extends PreferenceActivity
 	final private int REQUEST_CODE_ASK_MULTIPLE_PERMISSIONS = 124;
 	public static String PACKAGE_NAME;
 	boolean checkPermissions = false;
+	private final NotificationPromptGate notificationPromptGate = new NotificationPromptGate(this);
 
 	public void showMessageOKCancel(String message, DialogInterface.OnClickListener onClickListener)
 	{
@@ -116,6 +117,10 @@ public final class MainMenuActivity extends PreferenceActivity
 
 	public void finalStartup()
 	{
+		// HB: 시스템의 알림 허용 창이 떠 있으면 답할 때까지 넘어가지 않는다(NotificationPromptGate).
+		if (notificationPromptGate.hold())
+			return;
+
 		Intent retro = new Intent(this, RetroActivityFuture.class);
 
 		if (RetroActivityFuture.isRunning) {
@@ -200,5 +205,19 @@ public final class MainMenuActivity extends PreferenceActivity
 			finalStartup();
 		else
 			checkRuntimePermissions();
+	}
+
+	@Override
+	protected void onResume()
+	{
+		super.onResume();
+		notificationPromptGate.onResume();
+	}
+
+	@Override
+	public void onWindowFocusChanged(boolean hasFocus)
+	{
+		super.onWindowFocusChanged(hasFocus);
+		notificationPromptGate.onWindowFocusChanged(hasFocus);
 	}
 }

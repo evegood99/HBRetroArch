@@ -13,11 +13,18 @@
 | 코어 목록을 바깥에서 | 못 봄(`/data/data/<pkg>/cores` 는 앱 전용, adb 도 거절) | `content query` 로 봄 |
 | 코어 받기를 바깥에서 | 없음(`CoreSideloadActivity` 는 파일 복사 후 RetroArch 를 켬) | `content call … install` |
 | 패드 버튼 동시 입력 | 둘째 버튼이 다음 프레임에 들어감(격투 · 아케이드 동시 입력 실패) | 같은 프레임에 들어감(입력 스레드) |
-| 바탕 | v1.22.2 | v1.22.2 + `pkg/android/phoenix/haebang/` + `input/drivers/android_input.c` |
+| 바탕 | v1.22.2 | v1.22.2 + `pkg/android/phoenix/haebang/` + `input/drivers/android_input.c` + 첫 화면 알림 창 기다리기 |
 
-업스트림 파일은 `pkg/android/phoenix/build.gradle`(맛 `haebang`)과 `input/drivers/android_input.c`(동시 입력)를 고쳤다. 나머지는 모두 새 폴더다:
+고친 업스트림 파일은 셋이다.
+- `pkg/android/phoenix/build.gradle` — 맛 `haebang`
+- `input/drivers/android_input.c` — 동시 입력
+- `pkg/android/phoenix/src/com/retroarch/browser/mainmenu/MainMenuActivity.java` — 알림 허용 창 기다리기 (몇 줄)
+
+나머지는 모두 새 파일이다:
 
 ```
+pkg/android/phoenix/src/com/retroarch/browser/mainmenu/
+  NotificationPromptGate.java         알림 허용 창이 닫힐 때까지 첫 화면을 붙잡음
 pkg/android/phoenix/haebang/
   AndroidManifest.xml                 공급자 · 서비스 · 권한 (본 매니페스트 위에 합쳐짐)
   src/com/haebang/retroarch/
@@ -156,6 +163,22 @@ adb shell input gamepad keycombination -t 120 KEYCODE_BUTTON_A KEYCODE_BUTTON_B 
 짧은 누름 8/8 유지, 홈으로 나갔다 돌아온 뒤(드라이버 다시 시작) 정상, 터치 오버레이 · 메뉴 · 종료 정상,
 'unprocessed events' 경고 없음.
 
+## 알림 허용 창 (안드로이드 13+)
+
+코어를 받을 때 진행 알림을 띄우려고 알림 채널을 만든다(`CoreInstallService`).
+안드로이드 13+ 는 targetSdk 32 이하 앱(RetroArch 는 28)이 알림 채널을 가지고 있으면, 앱을 아이콘으로 켤 때 시스템이
+"알림을 보내도록 허용하시겠습니까?" 창을 그 앱의 작업 위에 대신 띄운다.
+
+공식 RetroArch 의 첫 화면(`MainMenuActivity`)은 곧바로 게임 화면(`RetroActivityFuture`, 따로 된 작업)으로 넘어가며 끝난다.
+그래서 이 창이 0.2초 만에 덮이고, 답을 못 한 채 아이콘으로 켤 때마다 다시 떴다(hb2 까지).
+
+**고침**(hb3, `NotificationPromptGate`)
+- 첫 화면이 넘어가기 직전에 자기 작업의 맨 위를 본다.
+- 다른 앱의 화면(그 창)이 있으면 넘어가기를 미룬다.
+- 창이 닫혀 첫 화면이 다시 앞에 오면(허용 · 허용 안 함 · 뒤로) 넘어간다.
+- 안드로이드 12 이하, 알림이 이미 허용됨, 창이 안 뜸(사용자가 이미 정함)이면 지금처럼 바로 넘어간다.
+- 프론트엔드가 게임 화면을 바로 켤 때(ES-DE · 해방런처)는 시스템이 이 창을 띄우지 않는다. 그 길은 바뀌지 않는다.
+
 ## 왜 받는 곳을 고정했나
 
 `retroarch.cfg` 의 `core_updater_buildbot_cores_url` 을 따르지 않는다. 그 파일은 `Android/data/…` 에 있어 옛 안드로이드에서는 저장소 권한만 있는 다른 앱도 고칠 수 있다 —
@@ -166,7 +189,7 @@ adb shell input gamepad keycombination -t 120 KEYCODE_BUTTON_A KEYCODE_BUTTON_B 
 ```sh
 git remote add upstream https://github.com/libretro/RetroArch.git   # 한 번만
 git fetch upstream tag v1.23.0
-git rebase --onto v1.23.0 v1.22.2 haebang   # 고친 업스트림 파일은 build.gradle 하나(.github/README.md 는 새 파일)
+git rebase --onto v1.23.0 v1.22.2 haebang   # 고친 업스트림 파일은 build.gradle · android_input.c · MainMenuActivity.java(.github/README.md 는 새 파일)
 git push --force-with-lease origin haebang
 ```
 
