@@ -13,18 +13,22 @@
 | 코어 목록을 바깥에서 | 못 봄(`/data/data/<pkg>/cores` 는 앱 전용, adb 도 거절) | `content query` 로 봄 |
 | 코어 받기를 바깥에서 | 없음(`CoreSideloadActivity` 는 파일 복사 후 RetroArch 를 켬) | `content call … install` |
 | 패드 버튼 동시 입력 | 둘째 버튼이 다음 프레임에 들어감(격투 · 아케이드 동시 입력 실패) | 같은 프레임에 들어감(입력 스레드) |
+| 120Hz 같은 높은 주사율 화면 | 시스템 기본 모드로 돌아 틈틈이 끊김(1칸 · 3칸 엇갈림) | 화면 모드를 `video_refresh_rate`(기본 60)에 맞춤 |
 | 바탕 | v1.22.2 | v1.22.2 + `pkg/android/phoenix/haebang/` + `input/drivers/android_input.c` + 첫 화면 알림 창 기다리기 |
 
-고친 업스트림 파일은 셋이다.
+고친 업스트림 파일은 넷이다.
 - `pkg/android/phoenix/build.gradle` — 맛 `haebang`
 - `input/drivers/android_input.c` — 동시 입력
 - `pkg/android/phoenix/src/com/retroarch/browser/mainmenu/MainMenuActivity.java` — 알림 허용 창 기다리기 (몇 줄)
+- `pkg/android/phoenix/src/com/retroarch/browser/retroactivity/RetroActivityFuture.java` — 화면 주사율 맞추기 (몇 줄)
 
 나머지는 모두 새 파일이다:
 
 ```
 pkg/android/phoenix/src/com/retroarch/browser/mainmenu/
   NotificationPromptGate.java         알림 허용 창이 닫힐 때까지 첫 화면을 붙잡음
+pkg/android/phoenix/src/com/retroarch/browser/retroactivity/
+  DisplayRefreshMatch.java            화면 모드를 video_refresh_rate 에 맞춤
 pkg/android/phoenix/haebang/
   AndroidManifest.xml                 공급자 · 서비스 · 권한 (본 매니페스트 위에 합쳐짐)
   src/com/haebang/retroarch/
@@ -163,6 +167,35 @@ adb shell input gamepad keycombination -t 120 KEYCODE_BUTTON_A KEYCODE_BUTTON_B 
 짧은 누름 8/8 유지, 홈으로 나갔다 돌아온 뒤(드라이버 다시 시작) 정상, 터치 오버레이 · 메뉴 · 종료 정상,
 'unprocessed events' 경고 없음.
 
+## 높은 주사율 화면 (120Hz)
+
+**증상**: 120Hz 화면 기기(RG 476H 등)에서 게임이 틈틈이 잠깐 느려지거나 끊겨 보인다. 공식 RetroArch 도 같다.
+
+**원인**
+- 앱이 바라는 주사율을 말하지 않으면 시스템은 화면을 높은 모드(120Hz)로 돌린다.
+- RetroArch 는 `video_refresh_rate`(기본 60)를 화면 주사율로 알고, 소리 속도에 맞춰 1초에 약 60프레임을 만든다.
+- 120Hz 에서 고르게 보이려면 프레임마다 정확히 2칸(16.7ms)씩 보여야 한다.
+  그런데 소리 시계와 화면 시계가 천천히 어긋나서, 프레임이 화면 갱신 시점 근처에 걸리는 구간마다 1칸(8.3ms) · 3칸(25ms)이 엇갈린다.
+- 영상 스레드를 꺼도 같다. 2칸마다 내보내기(`video_swap_interval = 2`)는 Vulkan 에서 먹히지 않는다
+  (120프레임으로 내달리다 소리 버퍼가 차면 0.15초씩 멈춘다).
+
+**고침**(hb4, `DisplayRefreshMatch`)
+- 게임 화면(`RetroActivityFuture`)이 앞에 올 때 실행 값 `REFRESH` 가 없으면, `video_refresh_rate` 에 가장 가까운 화면 모드(같은 해상도)를 요청한다.
+- `REFRESH` 를 주면 공식판처럼 그 값을 쓴다. `REFRESH 0` 이면 시스템에 맡긴다(비교용).
+- RetroArch 설정의 화면 주사율을 바꾸면 다음에 앞으로 올 때 그 값을 따른다.
+
+**확인(RG 476H · SFC · 약 40초)** — 화면에 프레임이 나온 간격:
+
+| | 2칸(16.7ms) | 1칸 / 3칸 |
+|---|---|---|
+| 120Hz 그대로 | 1139 | 705 / 683 |
+| 60Hz 모드 | 2513 (전부) | 0 / 0 |
+
+```sh
+adb shell am start -n com.haebang.retroarch/com.retroarch.browser.retroactivity.RetroActivityFuture -e REFRESH 0 …   # 예전 동작(비교용)
+adb shell logcat -s HBRefresh   # 고른 모드
+```
+
 ## 알림 허용 창 (안드로이드 13+)
 
 코어를 받을 때 진행 알림을 띄우려고 알림 채널을 만든다(`CoreInstallService`).
@@ -189,7 +222,7 @@ adb shell input gamepad keycombination -t 120 KEYCODE_BUTTON_A KEYCODE_BUTTON_B 
 ```sh
 git remote add upstream https://github.com/libretro/RetroArch.git   # 한 번만
 git fetch upstream tag v1.23.0
-git rebase --onto v1.23.0 v1.22.2 haebang   # 고친 업스트림 파일은 build.gradle · android_input.c · MainMenuActivity.java(.github/README.md 는 새 파일)
+git rebase --onto v1.23.0 v1.22.2 haebang   # 고친 업스트림 파일은 build.gradle · android_input.c · MainMenuActivity.java · RetroActivityFuture.java(.github/README.md 는 새 파일)
 git push --force-with-lease origin haebang
 ```
 

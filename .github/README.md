@@ -20,7 +20,7 @@ HB RetroArch 는 RetroArch 1.22.2 에 공급자(ContentProvider) 하나를 더�
 - 받는 진행 상황을 봅니다.
 - 최신 버전인지 봅니다. buildbot 목록과 CRC 를 견줍니다.
 
-또 **패드 버튼 동시 입력** 문제를 고쳤습니다(아래 설명). 그 밖의 동작(메뉴 · 코어 실행 · 설정)은 공식 RetroArch 1.22.2 와 같습니다.
+또 **패드 버튼 동시 입력** 문제와 **120Hz 화면의 주기적 끊김**을 고쳤습니다(아래 설명). 그 밖의 동작(메뉴 · 코어 실행 · 설정)은 공식 RetroArch 1.22.2 와 같습니다.
 
 ## 공식 RetroArch 와 다른 점
 
@@ -30,6 +30,7 @@ HB RetroArch 는 RetroArch 1.22.2 에 공급자(ContentProvider) 하나를 더�
 | 바깥에서 코어 목록 보기 | 불가 | `content query` / ContentResolver |
 | 바깥에서 코어 받기 | 불가 | `content call … install` |
 | 패드 버튼 동시 입력 | 둘째 버튼이 다음 프레임에 들어가 격투 · 아케이드 게임의 동시 입력이 자주 실패 | 같은 프레임에 들어갑니다(입력 스레드) |
+| 120Hz 같은 높은 주사율 화면 | 화면이 120Hz 로 돌아 게임이 틈틈이 끊겨 보임 | 화면을 RetroArch 의 화면 주사율 설정(기본 60Hz)에 맞춥니다 |
 | ABI | 빌드마다 다름 | arm64-v8a + armeabi-v7a (한 APK) |
 | 세이브 · 스테이트 · BIOS · 재생목록 | `/storage/emulated/0/RetroArch` | **같은 폴더를 함께 씁니다** |
 | 설정(retroarch.cfg) · 코어 | 앱마다 | 따로입니다(`Android/data/com.haebang.retroarch/files`) |
@@ -98,6 +99,20 @@ adb shell "content query --uri 'content://com.haebang.retroarch.cores/jobs?forma
 
 자세한 내용과 기기에서 공식 방식으로 되돌려 비교하는 법은 [haebang/README.md](https://github.com/evegood99/HBRetroArch/blob/haebang/haebang/README.md)에 있습니다.
 
+## 120Hz 화면의 주기적 끊김
+
+120Hz 화면 기기(RG 476H 등)에서 게임이 틈틈이 잠깐 느려지거나 끊겨 보이는 문제입니다. 공식 RetroArch 도 같습니다.
+
+- **원인**
+  - 앱이 바라는 주사율을 말하지 않으면 시스템은 화면을 120Hz 로 돌립니다.
+  - RetroArch 는 화면이 60Hz 라고 알고 1초에 약 60프레임을 만듭니다.
+  - 프레임마다 화면 2칸씩 고르게 보여야 하는데, 소리와 화면의 시계가 조금씩 어긋나서 1칸 · 3칸이 엇갈리는 구간이 주기적으로 생깁니다.
+- **고침**: 게임 화면이 켜질 때 RetroArch 의 화면 주사율 설정(기본 60Hz)에 가장 가까운 화면 모드를 시스템에 요청합니다.
+  - 프론트엔드가 실행 값 `REFRESH` 를 넘기면 공식판처럼 그 값을 따릅니다.
+- **시험**: RG 476H 에서 약 40초 동안 프레임 간격을 쟀습니다.
+  - 120Hz 그대로: 1칸 · 3칸 엇갈림 1,388번
+  - 60Hz 모드: 0번
+
 ## 소스에서 빌드
 
 ```powershell
@@ -108,12 +123,14 @@ python haebang\build.py        # → haebang\out\HBRetroArch-1.22.2-<hb 번호>.
 - 메뉴 그림 · 코어 정보 · 셰이더 같은 assets 는 RetroArch 저장소에 없습니다. `build.py` 가 같은 버전 공식 APK 에서 풀어 넣습니다.
 - 서명 열쇠는 처음 빌드할 때 `haebang/keystore/` 에 만듭니다. git 에는 올리지 않습니다.
 
-고친 업스트림 파일은 셋입니다.
+고친 업스트림 파일은 넷입니다.
 - `pkg/android/phoenix/build.gradle` — 맛 `haebang`
 - `input/drivers/android_input.c` — 동시 입력
 - `MainMenuActivity.java` — 안드로이드 13+ 에서 아이콘으로 켤 때 알림 허용 창이 덮여 매번 다시 뜨던 것
+- `RetroActivityFuture.java` — 120Hz 화면의 주기적 끊김
 
-나머지는 새 파일입니다. 대부분은 `pkg/android/phoenix/haebang/` 과 `haebang/` 에 있고, `NotificationPromptGate.java` 만 `MainMenuActivity.java` 옆에 있습니다.
+나머지는 새 파일입니다. 대부분은 `pkg/android/phoenix/haebang/` 과 `haebang/` 에 있습니다.
+`NotificationPromptGate.java` 는 `MainMenuActivity.java` 옆에, `DisplayRefreshMatch.java` 는 `RetroActivityFuture.java` 옆에 있습니다.
 
 ## 업스트림 따라가기
 

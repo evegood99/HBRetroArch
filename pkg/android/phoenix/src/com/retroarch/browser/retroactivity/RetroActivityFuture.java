@@ -107,6 +107,9 @@ public final class RetroActivityFuture extends RetroActivityCamera {
         WindowManager.LayoutParams params = getWindow().getAttributes();
         params.preferredRefreshRate = Integer.parseInt(refresh);
         getWindow().setAttributes(params);
+      } else {
+        // HB: 없으면 화면 모드를 video_refresh_rate(기본 60)에 맞춘다 — 120Hz 화면의 주기적 끊김(DisplayRefreshMatch)
+        DisplayRefreshMatch.apply(this, getIntent().getStringExtra("CONFIGFILE"));
       }
     }
 
