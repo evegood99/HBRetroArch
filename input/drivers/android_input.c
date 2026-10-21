@@ -18,8 +18,13 @@
 
 #include <unistd.h>
 #include <dlfcn.h>
+#include <string.h>
+#include <time.h>
 
 #include <android/keycodes.h>
+#include <android/log.h>
+#include <sys/system_properties.h>
+#include <rthreads/rthreads.h>
 
 #include <dynamic/dylib.h>
 #include <retro_inline.h>
@@ -92,6 +97,73 @@ enum {
 /* First ports are used to keep track of gamepad states.
  * Last port is used for keyboard state */
 static uint8_t android_key_state[DEFAULT_MAX_PADS + 1][MAX_KEYS];
+
+/* HB RetroArch: dedicated input thread (simultaneous button presses).
+ *
+ * Android's InputDispatcher does not send a key event to the focused window
+ * until every event it sent before has been finished by the app
+ * (InputDispatcher::shouldWaitToSendKeyLocked). The stock driver only reads
+ * the input queue once per frame, so when two buttons are pressed together
+ * the second key is delivered only after the first one was finished, i.e. in
+ * the *next* frame. Games that need both buttons in the same frame (fighting
+ * and arcade games) then miss the combination.
+ *
+ * The input thread drains the queue as soon as events arrive and finishes
+ * gamepad key/axis events immediately, so the dispatcher can deliver the
+ * following keys within the same frame. Key presses go to 'live' state plus
+ * a 'latch' (pressed at least once since the last poll); android_input_poll()
+ * publishes live|latch into android_key_state once per frame, so readers see
+ * a frame-consistent state and a tap shorter than one frame is not lost.
+ * Touch, mouse, keyboard devices and not-yet-known devices (hotplug) are
+ * handed back to the main thread unchanged.
+ *
+ * Runtime switches (adb shell setprop):
+ *   debug.hbra.inputthread 0   use the stock per-frame path (A/B testing)
+ *   debug.hbra.inputlog    1   log per-frame key changes to logcat (tag HBInput) */
+static uint8_t android_key_live[DEFAULT_MAX_PADS + 1][MAX_KEYS];
+static uint8_t android_key_latch[DEFAULT_MAX_PADS + 1][MAX_KEYS];
+static uint8_t hb_key_prev[DEFAULT_MAX_PADS + 1][MAX_KEYS];
+#define HB_DEFER_MAX 256
+static AInputEvent *hb_deferred[HB_DEFER_MAX];
+static unsigned hb_deferred_count = 0;
+static slock_t *hb_input_lock     = NULL;
+static sthread_t *hb_input_thread = NULL;
+static ALooper *hb_input_looper   = NULL;
+static volatile bool hb_input_quit = false;
+static volatile bool hb_threaded   = false;   /* input thread owns the queue */
+static bool hb_inputlog            = false;
+static unsigned hb_frame           = 0;
+
+static bool hb_prop_is(const char *name, const char *value)
+{
+   char buf[PROP_VALUE_MAX] = {0};
+   if (__system_property_get(name, buf) <= 0)
+      return false;
+   return string_is_equal(buf, value);
+}
+
+static long long hb_now_ms(void)
+{
+   struct timespec ts;
+   clock_gettime(CLOCK_MONOTONIC, &ts);
+   return (long long)ts.tv_sec * 1000LL + ts.tv_nsec / 1000000;
+}
+
+static long long hb_now_us(void)
+{
+   struct timespec ts;
+   clock_gettime(CLOCK_MONOTONIC, &ts);
+   return (long long)ts.tv_sec * 1000000LL + ts.tv_nsec / 1000;
+}
+
+/* Keys pressed together reach the app one by one (~1 ms apart, see above).
+ * When the frame state is published right after a key came in, wait until the
+ * key stream has been quiet for HB_BURST_QUIET_US (at most HB_BURST_MAX_US) so
+ * the rest of the burst lands in the same frame. */
+#define HB_BURST_QUIET_US 2500
+#define HB_BURST_MAX_US   4000
+static volatile long long hb_last_key_us = 0;
+static long long hb_last_wait_us        = 0;   /* inputlog: how long the last publish waited */
 
 #define ANDROID_KEYBOARD_PORT_INPUT_PRESSED(binds, id) (BIT_GET(android_key_state[ANDROID_KEYBOARD_PORT], rarch_keysym_lut[(binds)[(id)].key]))
 
@@ -171,6 +243,8 @@ void (*engine_handle_dpad)(struct android_app *, AInputEvent*, int, int);
 static void android_input_poll_input_gingerbread(android_input_t *android);
 static void android_input_poll_input_default(android_input_t *android);
 static void (*android_input_poll_input)(android_input_t *android);
+static void hb_input_start(android_input_t *android);
+static void hb_input_stop(android_input_t *android);
 
 static bool android_input_set_sensor_state(void *data, unsigned port,
       enum retro_sensor_action action, unsigned event_rate);
@@ -199,6 +273,10 @@ static void android_keyboard_free(void)
     for (i = 0; i < DEFAULT_MAX_PADS; i++)
         for (j = 0; j < MAX_KEYS; j++)
             android_key_state[i][j] = 0;
+
+    memset(android_key_live, 0, sizeof(android_key_live));
+    memset(android_key_latch, 0, sizeof(android_key_latch));
+    memset(hb_key_prev, 0, sizeof(hb_key_prev));
 
     for (i = 0; i < (unsigned) kbd_num; i++)
         kbd_id[i] = -1;
@@ -384,17 +462,29 @@ static void android_input_poll_main_cmd(void)
 
       case APP_CMD_INPUT_CHANGED:
          slock_lock(android_app->mutex);
+         if (hb_input_lock)
+            slock_lock(hb_input_lock);
 
          if (android_app->inputQueue)
+         {
+            /* Events held for the main thread belong to the old queue */
+            unsigned i;
+            for (i = 0; i < hb_deferred_count; i++)
+               AInputQueue_finishEvent(android_app->inputQueue, hb_deferred[i], 0);
+            hb_deferred_count = 0;
             AInputQueue_detachLooper(android_app->inputQueue);
+         }
 
          android_app->inputQueue = android_app->pendingInputQueue;
 
+         /* HB: the input thread's looper when it runs, else the main looper */
          if (android_app->inputQueue)
             AInputQueue_attachLooper(android_app->inputQueue,
-                  android_app->looper, LOOPER_ID_INPUT, NULL,
-                  NULL);
+                  (hb_threaded && hb_input_looper) ? hb_input_looper : android_app->looper,
+                  LOOPER_ID_INPUT, NULL, NULL);
 
+         if (hb_input_lock)
+            slock_unlock(hb_input_lock);
          scond_broadcast(android_app->cond);
          slock_unlock(android_app->mutex);
 
@@ -619,6 +709,10 @@ static void *android_input_init(const char *joypad_driver)
          sizeof(android->device_model));
 
    android_app->input_alive = true;
+
+   /* HB: read gamepad events on their own thread (simultaneous presses) */
+   if (android_input_poll_input == android_input_poll_input_default)
+      hb_input_start(android);
 
    return android;
 }
@@ -913,7 +1007,8 @@ static INLINE void android_input_poll_event_type_key(
       AInputEvent *event, int port, int keycode, int source,
       int type_event, int *handled)
 {
-   uint8_t *buf = android_key_state[port];
+   /* HB: with the input thread, keys go to live/latch and are published once per poll */
+   uint8_t *buf = hb_threaded ? android_key_live[port] : android_key_state[port];
    int action   = AKeyEvent_getAction(event);
    int keysym   = keycode;
 
@@ -938,8 +1033,18 @@ static INLINE void android_input_poll_event_type_key(
          break;
       case AKEY_EVENT_ACTION_DOWN:
          BIT_SET(buf, keysym);
+         if (hb_threaded)
+            BIT_SET(android_key_latch[port], keysym);
          break;
    }
+   if (hb_threaded)
+      hb_last_key_us = hb_now_us();
+
+   if (hb_inputlog && (action == AKEY_EVENT_ACTION_UP || action == AKEY_EVENT_ACTION_DOWN))
+      __android_log_print(ANDROID_LOG_INFO, "HBInput",
+            "event key=%d %s port=%d poll=%u tid=%d evt=%lld now=%lld", keycode,
+            action == AKEY_EVENT_ACTION_DOWN ? "down" : "up", port, hb_frame, (int)gettid(),
+            (long long)(AKeyEvent_getEventTime(event) / 1000000LL), hb_now_ms());
 
    if ((keycode == AKEYCODE_VOLUME_UP || keycode == AKEYCODE_VOLUME_DOWN))
       *handled = 0;
@@ -1512,6 +1617,66 @@ static void android_input_poll_input_gingerbread(
    }
 }
 
+/* One input event, main thread (port lookup may hotplug a new device).
+ * Returns the 'handled' flag for AInputQueue_finishEvent. */
+static int32_t android_input_handle_event(android_input_t *android,
+      struct android_app *android_app, AInputEvent *event, int predispatched)
+{
+   int32_t   handled = 1;
+   int        source = AInputEvent_getSource(event);
+   int    type_event = AInputEvent_getType(event);
+   int            id = android_input_get_id(event);
+   int          port = android_input_get_id_port(android, id, source);
+
+   if (port < 0 && !android_is_keyboard_id(id))
+      port = android_input_recover_port(android, id);
+
+   if (port < 0 && !android_is_keyboard_id(id))
+      handle_hotplug(android, android_app,
+            &port, id, source);
+
+   switch (type_event)
+   {
+      case AINPUT_EVENT_TYPE_MOTION:
+         if ((source & AINPUT_SOURCE_TOUCHPAD))
+            engine_handle_touchpad(android_app, event, port);
+         /* Only handle events from a touchscreen or mouse */
+         else if ((source & (AINPUT_SOURCE_TOUCHSCREEN
+                     | AINPUT_SOURCE_MOUSE_RELATIVE
+                     | AINPUT_SOURCE_STYLUS | AINPUT_SOURCE_MOUSE)))
+            android_input_poll_event_type_motion(android, event,
+                  port, source);
+         else
+            engine_handle_dpad(android_app, event, port, source);
+         break;
+      case AINPUT_EVENT_TYPE_KEY:
+         {
+            int keycode = AKeyEvent_getKeyCode(event);
+
+            if (!keycode)
+               break;
+
+            if (android_is_keyboard_id(id))
+            {
+               if (!predispatched)
+               {
+                  android_input_poll_event_type_keyboard(
+                        event, keycode, &handled);
+                  android_input_poll_event_type_key(
+                        android_app, event, ANDROID_KEYBOARD_PORT,
+                        keycode, source, type_event, &handled);
+               }
+            }
+            else
+               android_input_poll_event_type_key(android_app,
+                     event, port, keycode, source, type_event, &handled);
+         }
+         break;
+   }
+
+   return handled;
+}
+
 static void android_input_poll_input_default(android_input_t *android)
 {
    AInputEvent              *event = NULL;
@@ -1522,65 +1687,290 @@ static void android_input_poll_input_default(android_input_t *android)
    {
       while (AInputQueue_getEvent(android_app->inputQueue, &event) >= 0)
       {
-         int32_t   handled = 1;
          int predispatched = AInputQueue_preDispatchEvent(
                android_app->inputQueue, event);
-         int        source = AInputEvent_getSource(event);
-         int    type_event = AInputEvent_getType(event);
-         int            id = android_input_get_id(event);
-         int          port = android_input_get_id_port(android, id, source);
-
-         if (port < 0 && !android_is_keyboard_id(id))
-            port = android_input_recover_port(android, id);
-
-         if (port < 0 && !android_is_keyboard_id(id))
-            handle_hotplug(android, android_app,
-                  &port, id, source);
-
-         switch (type_event)
-         {
-            case AINPUT_EVENT_TYPE_MOTION:
-               if ((source & AINPUT_SOURCE_TOUCHPAD))
-                  engine_handle_touchpad(android_app, event, port);
-               /* Only handle events from a touchscreen or mouse */
-               else if ((source & (AINPUT_SOURCE_TOUCHSCREEN
-                           | AINPUT_SOURCE_MOUSE_RELATIVE
-                           | AINPUT_SOURCE_STYLUS | AINPUT_SOURCE_MOUSE)))
-                  android_input_poll_event_type_motion(android, event,
-                        port, source);
-               else
-                  engine_handle_dpad(android_app, event, port, source);
-               break;
-            case AINPUT_EVENT_TYPE_KEY:
-               {
-                  int keycode = AKeyEvent_getKeyCode(event);
-
-                  if (!keycode)
-                     break;
-
-                  if (android_is_keyboard_id(id))
-                  {
-                     if (!predispatched)
-                     {
-                        android_input_poll_event_type_keyboard(
-                              event, keycode, &handled);
-                        android_input_poll_event_type_key(
-                              android_app, event, ANDROID_KEYBOARD_PORT,
-                              keycode, source, type_event, &handled);
-                     }
-                  }
-                  else
-                     android_input_poll_event_type_key(android_app,
-                           event, port, keycode, source, type_event, &handled);
-               }
-               break;
-         }
+         int32_t   handled = android_input_handle_event(android,
+               android_app, event, predispatched);
 
          if (!predispatched)
             AInputQueue_finishEvent(android_app->inputQueue, event,
                   handled);
       }
    }
+}
+
+/* ---- HB: input thread --------------------------------------------------- */
+
+/* Input thread, hb_input_lock held. Gamepad keys and axes of an already known
+ * device are handled at once; everything else is left to the main thread.
+ * Returns true when the event was handled (the caller finishes it). */
+static bool hb_input_handle_now(android_input_t *android,
+      struct android_app *android_app, AInputEvent *event, int32_t *handled)
+{
+   int source     = AInputEvent_getSource(event);
+   int type_event = AInputEvent_getType(event);
+   int id         = android_input_get_id(event);
+   int port;
+
+   if (android_is_keyboard_id(id))
+      return false;   /* keyboard callbacks run on the main thread */
+   if (type_event == AINPUT_EVENT_TYPE_MOTION && (source & (AINPUT_SOURCE_TOUCHPAD
+               | AINPUT_SOURCE_TOUCHSCREEN | AINPUT_SOURCE_MOUSE_RELATIVE
+               | AINPUT_SOURCE_STYLUS | AINPUT_SOURCE_MOUSE)))
+      return false;   /* touch overlay / mouse state lives on the main thread */
+   port = android_input_get_id_port(android, id, source);
+   if (port < 0)
+      return false;   /* unknown device: the main thread does the hotplug */
+
+   if (type_event == AINPUT_EVENT_TYPE_KEY)
+   {
+      int keycode = AKeyEvent_getKeyCode(event);
+      if (keycode)
+         android_input_poll_event_type_key(android_app, event, port,
+               keycode, source, type_event, handled);
+      return true;
+   }
+   if (type_event == AINPUT_EVENT_TYPE_MOTION)
+   {
+      engine_handle_dpad(android_app, event, port, source);
+      return true;
+   }
+   return false;
+}
+
+static void hb_input_pump(android_input_t *android)
+{
+   struct android_app *android_app = (struct android_app*)g_android;
+   AInputEvent *event              = NULL;
+
+   slock_lock(hb_input_lock);
+   if (hb_threaded && android_app->inputQueue)
+   {
+      while (AInputQueue_getEvent(android_app->inputQueue, &event) >= 0)
+      {
+         int32_t handled = 1;
+         /* Sent to the IME first — it comes back through the queue later */
+         if (AInputQueue_preDispatchEvent(android_app->inputQueue, event))
+            continue;
+         if (hb_input_handle_now(android, android_app, event, &handled))
+            AInputQueue_finishEvent(android_app->inputQueue, event, handled);
+         else if (hb_deferred_count < HB_DEFER_MAX)
+            hb_deferred[hb_deferred_count++] = event;
+         else
+            AInputQueue_finishEvent(android_app->inputQueue, event, 0);
+      }
+   }
+   slock_unlock(hb_input_lock);
+}
+
+static void hb_input_thread_main(void *data)
+{
+   android_input_t *android = (android_input_t*)data;
+   /* The input queue is attached with an ident and no callback (like the
+    * main looper of the native app glue) — the looper must allow that */
+   ALooper *looper          = ALooper_prepare(ALOOPER_PREPARE_ALLOW_NON_CALLBACKS);
+   bool quit;
+
+   /* Publish the looper only if nobody asked us to stop yet — hb_input_stop()
+    * wakes whatever looper it finds here */
+   slock_lock(hb_input_lock);
+   quit = hb_input_quit;
+   if (!quit)
+      hb_input_looper = looper;
+   slock_unlock(hb_input_lock);
+   if (quit)
+      return;
+
+   while (!hb_input_quit)
+   {
+      int ident = ALooper_pollOnce(-1, NULL, NULL, NULL);
+      if (hb_input_quit)
+         break;
+      if (ident == LOOPER_ID_INPUT)
+         hb_input_pump(android);
+   }
+}
+
+/* Main thread, hb_input_lock held: events the input thread left to us */
+static void hb_input_drain_deferred(android_input_t *android)
+{
+   unsigned i;
+   struct android_app *android_app = (struct android_app*)g_android;
+
+   for (i = 0; i < hb_deferred_count; i++)
+   {
+      int32_t handled = android_input_handle_event(android, android_app,
+            hb_deferred[i], 0);
+      if (android_app->inputQueue)
+         AInputQueue_finishEvent(android_app->inputQueue, hb_deferred[i], handled);
+   }
+   hb_deferred_count = 0;
+}
+
+/* Main thread, once per poll: publish live | latched keys as this frame's state */
+static void hb_input_publish(android_input_t *android)
+{
+   unsigned p, i;
+   long long start;
+
+   slock_lock(hb_input_lock);
+   hb_input_drain_deferred(android);
+   slock_unlock(hb_input_lock);
+
+   /* A key just came in (or the main thread just finished one above): the keys
+    * pressed with it are still on their way — let the burst finish first.
+    * Costs nothing on frames without a recent key. */
+   start = hb_now_us();
+   for (;;)
+   {
+      long long now = hb_now_us();
+      if (now - hb_last_key_us >= HB_BURST_QUIET_US || now - start >= HB_BURST_MAX_US)
+         break;
+      usleep(200);
+   }
+   hb_last_wait_us = hb_now_us() - start;
+
+   slock_lock(hb_input_lock);
+   for (p = 0; p < DEFAULT_MAX_PADS + 1; p++)
+      for (i = 0; i < MAX_KEYS; i++)
+      {
+         android_key_state[p][i] = android_key_live[p][i] | android_key_latch[p][i];
+         android_key_latch[p][i] = 0;
+      }
+   slock_unlock(hb_input_lock);
+}
+
+/* inputlog: which keys changed in this frame (what the core sees) */
+static void hb_input_log_frame(void)
+{
+   unsigned p, i, b;
+   char down[256], up[256];
+   size_t nd = 0, nu = 0;
+
+   down[0] = up[0] = '\0';
+   for (p = 0; p < DEFAULT_MAX_PADS + 1; p++)
+      for (i = 0; i < MAX_KEYS; i++)
+      {
+         uint8_t now = android_key_state[p][i], was = hb_key_prev[p][i];
+         if (now == was)
+            continue;
+         for (b = 0; b < 8; b++)
+         {
+            uint8_t m = (uint8_t)(1 << b);
+            if ((now & m) && !(was & m) && nd + 16 < sizeof(down))
+               nd += snprintf(down + nd, sizeof(down) - nd, " p%u:%u", p, i * 8 + b);
+            else if (!(now & m) && (was & m) && nu + 16 < sizeof(up))
+               nu += snprintf(up + nu, sizeof(up) - nu, " p%u:%u", p, i * 8 + b);
+         }
+         hb_key_prev[p][i] = now;
+      }
+   if (nd || nu)
+      __android_log_print(ANDROID_LOG_INFO, "HBInput", "frame poll=%u mode=%s now=%lld wait_us=%lld down[%s ] up[%s ]",
+            hb_frame, hb_threaded ? "thread" : "stock", hb_now_ms(), hb_threaded ? hb_last_wait_us : 0LL, down, up);
+}
+
+/* Start the input thread and move the input queue to its looper */
+static void hb_input_start(android_input_t *android)
+{
+   int tries;
+   struct android_app *android_app = (struct android_app*)g_android;
+
+   hb_inputlog = hb_prop_is("debug.hbra.inputlog", "1");
+   if (hb_prop_is("debug.hbra.inputthread", "0"))
+   {
+      RARCH_LOG("[HBInput] input thread off (debug.hbra.inputthread=0)\n");
+      return;
+   }
+   if (!(hb_input_lock = slock_new()))
+      return;
+   hb_input_quit   = false;
+   hb_input_looper = NULL;
+   if (!(hb_input_thread = sthread_create(hb_input_thread_main, android)))
+   {
+      slock_free(hb_input_lock);
+      hb_input_lock = NULL;
+      return;
+   }
+   for (tries = 0; tries < 200; tries++)
+   {
+      bool ready;
+      slock_lock(hb_input_lock);
+      ready = hb_input_looper != NULL;
+      slock_unlock(hb_input_lock);
+      if (ready)
+         break;
+      usleep(5000);
+   }
+
+   slock_lock(android_app->mutex);
+   slock_lock(hb_input_lock);
+   if (!hb_input_looper)
+   {
+      /* hb_threaded stays false: the main looper keeps the queue.
+       * hb_input_stop() still stops the thread. */
+      slock_unlock(hb_input_lock);
+      slock_unlock(android_app->mutex);
+      RARCH_WARN("[HBInput] input thread did not start, using the stock path\n");
+      return;
+   }
+   memset(android_key_live, 0, sizeof(android_key_live));
+   memset(android_key_latch, 0, sizeof(android_key_latch));
+   if (android_app->inputQueue)
+   {
+      AInputQueue_detachLooper(android_app->inputQueue);
+      AInputQueue_attachLooper(android_app->inputQueue, hb_input_looper,
+            LOOPER_ID_INPUT, NULL, NULL);
+   }
+   hb_threaded = true;
+   slock_unlock(hb_input_lock);
+   slock_unlock(android_app->mutex);
+   RARCH_LOG("[HBInput] input thread on\n");
+}
+
+/* Stop the input thread and give the queue back to the main looper */
+static void hb_input_stop(android_input_t *android)
+{
+   struct android_app *android_app = (struct android_app*)g_android;
+   ALooper *wake                   = NULL;
+
+   if (!hb_input_thread)
+      return;
+
+   slock_lock(android_app->mutex);
+   slock_lock(hb_input_lock);
+   if (hb_threaded)
+   {
+      unsigned i;
+      for (i = 0; i < hb_deferred_count; i++)
+         if (android_app->inputQueue)
+            AInputQueue_finishEvent(android_app->inputQueue, hb_deferred[i], 0);
+      hb_deferred_count = 0;
+      if (android_app->inputQueue)
+      {
+         AInputQueue_detachLooper(android_app->inputQueue);
+         AInputQueue_attachLooper(android_app->inputQueue,
+               android_app->looper, LOOPER_ID_INPUT, NULL, NULL);
+      }
+   }
+   hb_threaded = false;
+   /* Hold the thread's looper before raising 'quit': the thread cannot leave
+    * (and drop its own reference) until it sees the flag */
+   wake = hb_input_looper;
+   if (wake)
+      ALooper_acquire(wake);
+   hb_input_quit   = true;
+   hb_input_looper = NULL;
+   slock_unlock(hb_input_lock);
+   slock_unlock(android_app->mutex);
+
+   if (wake)
+      ALooper_wake(wake);
+   sthread_join(hb_input_thread);
+   hb_input_thread = NULL;
+   if (wake)
+      ALooper_release(wake);
+   slock_free(hb_input_lock);
+   hb_input_lock = NULL;
 }
 
 static void android_input_poll_user(android_input_t *android)
@@ -1637,8 +2027,15 @@ static void android_input_poll(void *data)
    android_input_t *android        = (android_input_t*)data;
    settings_t            *settings = config_get_ptr();
 
+   /* HB: publish what the input thread gathered since the last poll
+    * (touch, mouse, keyboard and hotplug events are handled here) */
+   if (hb_threaded)
+      hb_input_publish(android);
+
+   /* The block timeout only existed to catch the next key in the same frame —
+    * not needed when the input thread reads the queue */
    while ((ident =
-            ALooper_pollAll(settings->uints.input_block_timeout,
+            ALooper_pollAll(hb_threaded ? 0 : settings->uints.input_block_timeout,
                NULL, NULL, NULL)) >= 0)
    {
       switch (ident)
@@ -1669,6 +2066,10 @@ static void android_input_poll(void *data)
          return;
       }
    }
+
+   if (hb_inputlog)
+      hb_input_log_frame();
+   hb_frame++;
 }
 
 bool android_run_events(void *data)
@@ -1879,6 +2280,9 @@ static void android_input_free_input(void *data)
    struct android_app *android_app = (struct android_app*)g_android;
    if (!android)
       return;
+
+   /* HB: stop the input thread first — it uses this driver's state */
+   hb_input_stop(android);
 
    if (android_app->sensorManager &&
        android_app->sensorEventQueue)

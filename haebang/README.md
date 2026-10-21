@@ -12,9 +12,10 @@
 | 패키지 | `com.retroarch` · `.aarch64` · `.ra32` | `com.haebang.retroarch` (나란히 깔림) |
 | 코어 목록을 바깥에서 | 못 봄(`/data/data/<pkg>/cores` 는 앱 전용, adb 도 거절) | `content query` 로 봄 |
 | 코어 받기를 바깥에서 | 없음(`CoreSideloadActivity` 는 파일 복사 후 RetroArch 를 켬) | `content call … install` |
-| 바탕 | v1.22.2 | v1.22.2 + `pkg/android/phoenix/haebang/` |
+| 패드 버튼 동시 입력 | 둘째 버튼이 다음 프레임에 들어감(격투 · 아케이드 동시 입력 실패) | 같은 프레임에 들어감(입력 스레드) |
+| 바탕 | v1.22.2 | v1.22.2 + `pkg/android/phoenix/haebang/` + `input/drivers/android_input.c` |
 
-업스트림 파일은 `pkg/android/phoenix/build.gradle` 의 `haebang` 맛(flavor) 두 군데만 고쳤다. 나머지는 모두 새 폴더다:
+업스트림 파일은 `pkg/android/phoenix/build.gradle`(맛 `haebang`)과 `input/drivers/android_input.c`(동시 입력)를 고쳤다. 나머지는 모두 새 폴더다:
 
 ```
 pkg/android/phoenix/haebang/
@@ -31,7 +32,7 @@ haebang/build.py                      빌드
 
 ```powershell
 python haebang\build.py
-# → haebang\out\HBRetroArch-1.22.2-hb1.apk  (arm64-v8a + armeabi-v7a 통합판)
+# → haebang\out\HBRetroArch-1.22.2-<hb 번호>.apk  (arm64-v8a + armeabi-v7a 통합판, 번호는 build.gradle 의 versionName 꼬리)
 ```
 
 - 도구는 공식 CI 와 같다: **JDK 11**(`%USERPROFILE%\.jdks\jdk-11…`, `HB_JDK11` 로 바꿈) · Gradle 6.7.1(wrapper) · AGP 4.2 · **NDK 22.0.7026061**(`%LOCALAPPDATA%\Android\Sdk\ndk\`).
@@ -118,6 +119,42 @@ am start -n com.haebang.retroarch/com.retroarch.browser.retroactivity.RetroActiv
 ```
 
 세이브 · 스테이트 · BIOS(`/storage/emulated/0/RetroArch/{saves,states,system}`)는 공식 RetroArch 와 같은 자리를 기본으로 쓴다. 설정(retroarch.cfg)은 따로다.
+
+## 패드 버튼 동시 입력 (입력 스레드)
+
+안드로이드 RetroArch 에서 두 버튼을 동시에 눌러도 게임이 동시 입력으로 받지 못하는 문제
+(libretro/RetroArch #2043 · #13011 · #17823 · #18552 · #19643)를 고쳤다.
+
+**원인**
+- 안드로이드 InputDispatcher 는 앱이 앞서 받은 이벤트를 모두 '처리 완료'(finishEvent)해야 다음 키 이벤트를 보낸다
+  (`InputDispatcher::shouldWaitToSendKeyLocked` — "we must serialize key events with respect to all prior input events").
+- 공식 드라이버는 입력 큐를 프레임마다 한 번(`android_input_poll`)만 읽는다.
+- 그래서 A·B 를 같은 순간에 눌러도 이번 프레임에 A 를 읽고 끝내야 B 가 오고, B 는 다음 프레임에 읽힌다. 버튼이 셋이면 두 프레임 차이가 난다.
+- 공식판의 Input Block Timeout(0~4ms)은 매 프레임 그만큼 기다려 B 를 잡으려는 것이다. 매 프레임 시간을 쓰고, 4ms 안에 오지 않으면 실패한다.
+
+**고침** — `input/drivers/android_input.c`
+- 입력 큐를 전용 스레드의 루퍼에 붙인다.
+- 이미 아는 패드의 키 · 축 이벤트는 오는 즉시 처리하고 바로 끝낸다. 디스패처가 다음 키를 1ms 안팎에 보내므로 같은 프레임에 들어온다.
+- 키는 live(지금 상태) + latch(지난 읽기 뒤 한 번이라도 눌림)에 적는다.
+  `android_input_poll` 이 프레임마다 `live | latch` 를 `android_key_state` 로 내놓는다.
+  그래서 한 프레임 안에서 상태가 바뀌지 않고, 프레임보다 짧은 누름도 사라지지 않는다.
+- 같이 누른 키도 하나씩 오므로(키마다 약 1~2ms) 프레임 상태를 내놓기 직전에 키가 막 들어왔다면 2.5ms 조용해질 때까지 기다린다.
+  최대 4ms 이고, 키가 들어온 프레임에서만 기다린다. 실측으로는 키 프레임에서 평균 0.3~0.5ms 였다.
+- 터치 · 마우스 · 키보드 장치, 처음 보는 장치(연결 처리)는 예전처럼 메인 스레드가 처리한다(이벤트는 메인 스레드가 끝낸다).
+- Input Block Timeout 은 입력 스레드가 켜져 있으면 쓰지 않는다(필요 없음).
+
+**기기에서 바꿔 보기** (adb, 앱을 다시 켜면 적용)
+
+```sh
+adb shell setprop debug.hbra.inputthread 0   # 공식 방식(비교용) — 기본은 입력 스레드
+adb shell setprop debug.hbra.inputlog 1      # logcat 'HBInput': 키 이벤트 · 프레임마다 코어가 보는 눌림/뗌
+adb shell input gamepad keycombination -t 120 KEYCODE_BUTTON_A KEYCODE_BUTTON_B   # 동시 입력 흉내
+```
+
+**확인(RG 476H · 안드로이드 13 · snes9x)** — 주입한 A+B 동시 입력이 같은 프레임에 들어간 횟수:
+공식 방식 0/30, 입력 스레드 150/150(처음 보는 장치의 첫 입력 포함). 기다림은 키 프레임에서 평균 0.3~0.5ms, 최대 약 4ms.
+짧은 누름 8/8 유지, 홈으로 나갔다 돌아온 뒤(드라이버 다시 시작) 정상, 터치 오버레이 · 메뉴 · 종료 정상,
+'unprocessed events' 경고 없음.
 
 ## 왜 받는 곳을 고정했나
 

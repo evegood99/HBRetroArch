@@ -129,13 +129,21 @@ def gradle(props, task):
         sys.exit('gradle 실패 (%d)' % r.returncode)
 
 
+def hb_revision():
+    """build.gradle 의 haebang 맛 versionName 꼬리('-hb2' → 'hb2') — 파일 이름 · 태그가 같은 값을 쓴다."""
+    import re
+    with open(os.path.join(PHOENIX, 'build.gradle'), encoding='utf-8') as f:
+        m = re.search(r'versionName "\$\{getManifestAttribute\("versionName"\)\}-(hb\d+)"', f.read())
+    return m.group(1) if m else 'hb'
+
+
 def collect():
     src_dir = os.path.join(PHOENIX, 'build', 'outputs', 'apk', 'haebang', 'release')
     apks = [f for f in os.listdir(src_dir) if f.endswith('.apk')]
     if not apks:
         sys.exit('APK 가 안 나왔습니다: ' + src_dir)
     os.makedirs(OUT, exist_ok=True)
-    dest = os.path.join(OUT, 'HBRetroArch-%s-hb1.apk' % UPSTREAM_VERSION)
+    dest = os.path.join(OUT, 'HBRetroArch-%s-%s.apk' % (UPSTREAM_VERSION, hb_revision()))
     shutil.copy2(os.path.join(src_dir, apks[0]), dest)
     log('완료: %s (%.1f MB)' % (dest, os.path.getsize(dest) / 1048576))
     return dest

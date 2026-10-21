@@ -20,7 +20,7 @@ HB RetroArch 는 RetroArch 1.22.2 에 공급자(ContentProvider) 하나를 더�
 - 받는 진행 상황을 봅니다.
 - 최신 버전인지 봅니다. buildbot 목록과 CRC 를 견줍니다.
 
-그 밖의 동작(메뉴 · 코어 실행 · 설정)은 공식 RetroArch 1.22.2 와 같습니다.
+또 **패드 버튼 동시 입력** 문제를 고쳤습니다(아래 설명). 그 밖의 동작(메뉴 · 코어 실행 · 설정)은 공식 RetroArch 1.22.2 와 같습니다.
 
 ## 공식 RetroArch 와 다른 점
 
@@ -29,6 +29,7 @@ HB RetroArch 는 RetroArch 1.22.2 에 공급자(ContentProvider) 하나를 더�
 | 패키지 | `com.retroarch` · `.aarch64` · `.ra32` | `com.haebang.retroarch` — 공식판과 **나란히 깔립니다** |
 | 바깥에서 코어 목록 보기 | 불가 | `content query` / ContentResolver |
 | 바깥에서 코어 받기 | 불가 | `content call … install` |
+| 패드 버튼 동시 입력 | 둘째 버튼이 다음 프레임에 들어가 격투 · 아케이드 게임의 동시 입력이 자주 실패 | 같은 프레임에 들어갑니다(입력 스레드) |
 | ABI | 빌드마다 다름 | arm64-v8a + armeabi-v7a (한 APK) |
 | 세이브 · 스테이트 · BIOS · 재생목록 | `/storage/emulated/0/RetroArch` | **같은 폴더를 함께 씁니다** |
 | 설정(retroarch.cfg) · 코어 | 앱마다 | 따로입니다(`Android/data/com.haebang.retroarch/files`) |
@@ -78,17 +79,36 @@ adb shell "content query --uri 'content://com.haebang.retroarch.cores/jobs?forma
 
 전체 규약 · 안드로이드 앱에서 부르는 법은 [haebang/README.md](https://github.com/evegood99/HBRetroArch/blob/haebang/haebang/README.md)에 있습니다.
 
+## 패드 버튼 동시 입력
+
+안드로이드 RetroArch 에서 두 버튼을 동시에 눌러도(예: KOF 회피 A+B, 잡기) 게임이 동시 입력으로 받지 못하는 오래된 문제가 있습니다
+([#2043](https://github.com/libretro/RetroArch/issues/2043) · [#13011](https://github.com/libretro/RetroArch/issues/13011) ·
+[#19643](https://github.com/libretro/RetroArch/issues/19643) 등).
+
+- **원인**
+  - 안드로이드는 앱이 앞의 입력을 "처리 완료"해야 다음 키를 보냅니다.
+  - RetroArch 는 입력을 프레임마다 한 번만 읽습니다.
+  - 그래서 동시에 누른 둘째 버튼이 다음 프레임에 들어갑니다.
+- **고침**: 패드 입력을 전용 스레드가 오는 즉시 읽고 바로 처리 완료를 돌려줍니다. 동시에 누른 버튼이 같은 프레임에 들어갑니다.
+  - 프레임보다 짧게 눌린 버튼도 사라지지 않습니다.
+  - 공식판의 대안인 Input Block Timeout 은 매 프레임 기다립니다. 여기서는 키가 막 들어온 프레임에서만 아주 잠깐(평균 0.3~0.5ms, 최대 약 4ms) 기다립니다.
+- **시험**: RG 476H 에서 A+B 동시 입력을 흉내 냈을 때 같은 프레임에 들어간 횟수는 이렇습니다.
+  - 공식 방식 0/30
+  - HB RetroArch 150/150
+
+자세한 내용과 기기에서 공식 방식으로 되돌려 비교하는 법은 [haebang/README.md](https://github.com/evegood99/HBRetroArch/blob/haebang/haebang/README.md)에 있습니다.
+
 ## 소스에서 빌드
 
 ```powershell
-python haebang\build.py        # → haebang\out\HBRetroArch-1.22.2-hb1.apk
+python haebang\build.py        # → haebang\out\HBRetroArch-1.22.2-<hb 번호>.apk
 ```
 
 - 공식 CI 와 같은 도구를 씁니다: JDK 11 · Gradle 6.7.1 · Android Gradle Plugin 4.2 · NDK 22.0.7026061.
 - 메뉴 그림 · 코어 정보 · 셰이더 같은 assets 는 RetroArch 저장소에 없습니다. `build.py` 가 같은 버전 공식 APK 에서 풀어 넣습니다.
 - 서명 열쇠는 처음 빌드할 때 `haebang/keystore/` 에 만듭니다. git 에는 올리지 않습니다.
 
-고친 업스트림 파일은 `pkg/android/phoenix/build.gradle`(맛 `haebang`) 하나뿐입니다.
+고친 업스트림 파일은 `pkg/android/phoenix/build.gradle`(맛 `haebang`)과 `input/drivers/android_input.c`(동시 입력)입니다.
 나머지는 새 폴더 `pkg/android/phoenix/haebang/` 과 `haebang/` 에 있습니다.
 
 ## 업스트림 따라가기
