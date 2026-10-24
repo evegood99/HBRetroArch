@@ -73,6 +73,9 @@ python haebang\build.py
 - `crc32` 는 buildbot `.index-extended` 와 같은 방식(풀어 놓은 .so 의 CRC32) — 같으면 최신이다.
 - `abi_ok=0` 은 파일은 있지만 지금 앱 ABI 와 안 맞아 못 쓰는 코어(32↔64 로 다시 깐 경우) — '없음' 으로 보면 된다.
 - `display_name` 등은 `<info_dir>/<core>_libretro.info` 에서. 정보 파일이 없는 코어는 빈 값.
+- **파일 이름이 다른 코어(Azahar)** — 앱 안 온라인 업데이터는 buildbot 이름 그대로 `<코어>_libretro.so` 로 둔다(Azahar 는 buildbot 에
+  `azahar_libretro.so.zip` 으로 올라와 있다). `cores` 는 그 이름도 세고 `file` · `path` 에 실제 이름을 적는다. 둘 다 있으면 `_libretro_android.so` 쪽.
+  게임을 켤 때 `LIBRETRO` 에는 `file` 을 쓰면 된다. 브릿지로 받은 코어는 언제나 `<코어>_libretro_android.so` 다.
 
 ```sh
 adb shell content query --uri content://com.haebang.retroarch.cores/cores
@@ -104,6 +107,10 @@ adb shell content call --uri content://com.haebang.retroarch.cores --method inst
 ```
 
 - `install` 은 이미 있으면(ABI 도 맞으면) 받지 않고 `state=done, note=already_installed` 로 바로 끝낸다. 같은 코어가 받는 중이면 그 일을 돌려준다.
+  '있음'은 `<코어>_libretro_android.so` 와 `<코어>_libretro.so`(앱 안 업데이터가 둔 것) 둘 다 본다. `delete` 도 둘 다 지운다.
+- 받는 주소는 buildbot `.index-extended` 에 적힌 파일 이름이다(대부분 `<코어>_libretro_android.so.zip`, Azahar 는 `azahar_libretro.so.zip`).
+  목록에 없거나 오래됐으면 한 번 새로 받아 보고, 그래도 없으면 규약 이름으로 해 본다. 받은 코어는 언제나 `<코어>_libretro_android.so` 로 풀어 둔다
+  (RetroArch 는 코어 정보를 찾을 때 `_android` 꼬리를 떼므로 `azahar_libretro.info` 를 그대로 쓴다).
 - 깔린 것 전부 `update` 는 `--arg` 를 **빼고** 부른다(adb `content` 는 빈 `--arg ''` 를 받지 못함).
 - 받기는 `CoreInstallService`(전경 서비스, 알림에 진행률)가 차례로 한다 — 부른 쪽은 `jobs` 로 끝났는지 본다.
 - 넣기 전에 ELF 머리와 기계 종류(arm64 앱에 32비트 코어 등)를 확인하고, 임시 파일에 다 쓴 뒤 이름을 바꿔 넣는다.
@@ -128,6 +135,8 @@ am start -n com.haebang.retroarch/com.retroarch.browser.retroactivity.RetroActiv
   -e ROM <롬> -e LIBRETRO /data/data/com.haebang.retroarch/cores/<코어>_libretro_android.so \
   -e CONFIGFILE /storage/emulated/0/Android/data/com.haebang.retroarch/files/retroarch.cfg
 ```
+
+`LIBRETRO` 의 파일 이름은 `cores` 목록의 `file` 을 쓰는 것이 가장 정확하다(앱 안 업데이터로 받은 Azahar 는 `azahar_libretro.so`).
 
 세이브 · 스테이트 · BIOS(`/storage/emulated/0/RetroArch/{saves,states,system}`)는 공식 RetroArch 와 같은 자리를 기본으로 쓴다. 설정(retroarch.cfg)은 따로다.
 

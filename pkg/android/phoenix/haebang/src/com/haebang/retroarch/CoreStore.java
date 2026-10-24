@@ -45,6 +45,9 @@ final class CoreStore
    static final String TAG = "HBCoreBridge";
    static final int API_VERSION = 1;
    static final String SUFFIX = "_libretro_android.so";
+   /** 플랫폼 꼬리가 없는 이름 — buildbot 에 이렇게 올라온 코어(Azahar)를 앱 안 온라인 업데이터가 받으면 이 이름으로 둔다. */
+   static final String PLAIN_SUFFIX = "_libretro.so";
+   private static final Pattern INDEX_FILE = Pattern.compile("[A-Za-z0-9_+\\-.]{1,120}\\.zip");
    static final String BUILDBOT = "https://buildbot.libretro.com/nightly/android/latest/";
 
    static final String QUEUED = "queued";
@@ -272,9 +275,25 @@ final class CoreStore
       return out;
    }
 
+   /** 이 브릿지가 받거나 넣는 코어의 자리 — 언제나 '<코어>_libretro_android.so'(README '게임 켜기'의 약속). */
    File coreFile(String id)
    {
       return new File(coresDir(), id + SUFFIX);
+   }
+
+   File plainCoreFile(String id)
+   {
+      return new File(coresDir(), id + PLAIN_SUFFIX);
+   }
+
+   /** 실제로 깔린 파일 — 규약 이름이 먼저, 없으면 앱 안 온라인 업데이터가 둔 '<코어>_libretro.so'. 둘 다 없으면 null. */
+   File installedFile(String id)
+   {
+      File f = coreFile(id);
+      if (f.isFile())
+         return f;
+      File plain = plainCoreFile(id);
+      return plain.isFile() ? plain : null;
    }
 
    // ---------------------------------------------------------------- 깔린 코어
@@ -295,17 +314,31 @@ final class CoreStore
       File[] files = coresDir().listFiles();
       if (files == null)
          return out;
-      List<File> sorted = new ArrayList<>();
+      // 코어마다 파일 하나 — '_libretro_android.so' 와 '_libretro.so' 가 둘 다 있으면 규약 이름 쪽.
+      java.util.TreeMap<String, File> byCore = new java.util.TreeMap<>();
       for (File f : files)
       {
-         if (f.isFile() && f.getName().endsWith(SUFFIX) && !f.getName().startsWith("."))
-            sorted.add(f);
+         String name = f.getName();
+         if (!f.isFile() || name.startsWith("."))
+            continue;
+         String core;
+         if (name.endsWith(SUFFIX))
+            core = name.substring(0, name.length() - SUFFIX.length());
+         else if (name.endsWith(PLAIN_SUFFIX))
+            core = name.substring(0, name.length() - PLAIN_SUFFIX.length());
+         else
+            continue;
+         if (core.length() == 0)
+            continue;
+         File had = byCore.get(core);
+         if (had == null || !had.getName().endsWith(SUFFIX))
+            byCore.put(core, f);
       }
-      Collections.sort(sorted);
-      for (File f : sorted)
+      for (Map.Entry<String, File> e : byCore.entrySet())
       {
+         File f = e.getValue();
          Installed it = new Installed();
-         it.core = f.getName().substring(0, f.getName().length() - SUFFIX.length());
+         it.core = e.getKey();
          it.file = f;
          it.crc32 = withCrc ? crc32(f) : "";
          it.abi = elfAbi(f);
@@ -385,10 +418,16 @@ final class CoreStore
       return out;
    }
 
+   /** 두 이름(규약 · 앱 안 업데이터) 모두 지운다. 하나라도 지웠으면 true. */
    boolean delete(String core)
    {
-      File f = coreFile(core);
-      return f.isFile() && f.delete();
+      boolean any = false;
+      for (File f : new File[] { coreFile(core), plainCoreFile(core) })
+      {
+         if (f.isFile() && f.delete())
+            any = true;
+      }
+      return any;
    }
 
    // ---------------------------------------------------------------- buildbot 목록
@@ -494,12 +533,14 @@ final class CoreStore
       Job j = newJob(core, "buildbot");
       j.force = force;
       // 있어도 ABI 가 어긋나면(32↔64 로 다시 깐 경우) 못 쓰는 파일이므로 다시 받는다.
-      if (!force && coreFile(core).isFile() && abiOk(coreFile(core)))
+      // 앱 안 온라인 업데이터가 둔 '<코어>_libretro.so' 도 깔린 것으로 본다.
+      File have = installedFile(core);
+      if (!force && have != null && abiOk(have))
       {
          j.state = DONE;
          j.progress = 100;
          j.note = "already_installed";
-         j.crc32 = crc32(coreFile(core));
+         j.crc32 = crc32(have);
          j.finished = System.currentTimeMillis();
       }
       saveJobs();
@@ -580,7 +621,7 @@ final class CoreStore
       File zip = new File(app.getCacheDir(), "hb_dl_" + j.id + ".zip");
       try
       {
-         download(buildbotUrl() + j.core + SUFFIX + ".zip", zip, j, listener);
+         download(buildbotUrl() + downloadName(j.core), zip, j, listener);
          if (j.cancel)
          {
             finish(j, CANCELLED, "");
@@ -605,6 +646,32 @@ final class CoreStore
          zip.delete();
          listener.onProgress(j);
       }
+   }
+
+   /**
+    * buildbot 에서 받을 파일 이름 — 목록(.index-extended)에 적힌 이름을 쓴다. 대부분 '<코어>_libretro_android.so.zip' 이지만
+    * Azahar 처럼 '<코어>_libretro.so.zip' 으로 올라온 코어도 있다. 목록에 없거나 목록이 오래됐으면 한 번 새로 받아 보고,
+    * 그래도 없으면(오프라인 등) 규약 이름으로 해 본다.
+    */
+   private String downloadName(String core)
+   {
+      IndexEntry e = indexEntry(core);
+      if (e == null || indexStale())
+      {
+         try
+         {
+            index(true);
+            e = indexEntry(core);
+         }
+         catch (IOException ex)
+         {
+            Log.w(TAG, "buildbot index refresh failed — using the usual file name for " + core, ex);
+         }
+      }
+      // 목록의 이름은 파일 이름 하나여야 한다(경로 · '..' 이 섞이면 받는 곳이 buildbot 폴더를 벗어날 수 있다).
+      if (e != null && e.file != null && INDEX_FILE.matcher(e.file).matches() && !e.file.contains(".."))
+         return e.file;
+      return core + SUFFIX + ".zip";
    }
 
    /** 기기 안 파일(.so 또는 .so.zip)을 코어 폴더로 — 셸(adb)에서 올려 둔 파일용. 성공하면 코어 이름. */

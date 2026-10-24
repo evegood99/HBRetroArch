@@ -199,8 +199,8 @@ public class CoreBridgeProvider extends ContentProvider
       {
          if (only != null && !only.equals(e.core))
             continue;
-         File f = st.coreFile(e.core);
-         boolean installed = f.isFile();
+         File f = st.installedFile(e.core);
+         boolean installed = f != null;
          String local = installed ? st.crc32(f) : "";
          JSONObject o = new JSONObject();
          o.put("core", e.core);
@@ -318,8 +318,8 @@ public class CoreBridgeProvider extends ContentProvider
             boolean again = force;
             if (update)
             {
-               File f = st.coreFile(id);
-               again = !f.isFile() || known == null || !st.crc32(f).equals(known.crc32);
+               File f = st.installedFile(id);
+               again = f == null || known == null || !st.crc32(f).equals(known.crc32);
             }
             CoreStore.Job j = st.enqueue(id, again);
             if (CoreStore.QUEUED.equals(j.state))
