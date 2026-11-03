@@ -20,7 +20,7 @@
 - `pkg/android/phoenix/build.gradle` — 맛 `haebang`
 - `input/drivers/android_input.c` — 동시 입력
 - `pkg/android/phoenix/src/com/retroarch/browser/mainmenu/MainMenuActivity.java` — 알림 허용 창 기다리기 (몇 줄)
-- `pkg/android/phoenix/src/com/retroarch/browser/retroactivity/RetroActivityFuture.java` — 화면 주사율 맞추기 (몇 줄)
+- `pkg/android/phoenix/src/com/retroarch/browser/retroactivity/RetroActivityFuture.java` — 화면 주사율 맞추기 · 기본 자료 풀기 (몇 줄)
 
 나머지는 모두 새 파일이다:
 
@@ -29,6 +29,7 @@ pkg/android/phoenix/src/com/retroarch/browser/mainmenu/
   NotificationPromptGate.java         알림 허용 창이 닫힐 때까지 첫 화면을 붙잡음
 pkg/android/phoenix/src/com/retroarch/browser/retroactivity/
   DisplayRefreshMatch.java            화면 모드를 video_refresh_rate 에 맞춤
+  BundleAssetsCheck.java              바로 켤 때도 기본 자료(글꼴 · 아이콘 · 코어 정보)를 풀게 함
 pkg/android/phoenix/haebang/
   AndroidManifest.xml                 공급자 · 서비스 · 권한 (본 매니페스트 위에 합쳐짐)
   src/com/haebang/retroarch/
@@ -204,6 +205,25 @@ adb shell input gamepad keycombination -t 120 KEYCODE_BUTTON_A KEYCODE_BUTTON_B 
 adb shell am start -n com.haebang.retroarch/com.retroarch.browser.retroactivity.RetroActivityFuture -e REFRESH 0 …   # 예전 동작(비교용)
 adb shell logcat -s HBRefresh   # 고른 모드
 ```
+
+## 기본 자료 풀기 (글꼴 · 아이콘 · 코어 정보)
+
+**증상**: 메뉴의 한글이 '??' 로 나오고 아이콘이 빈칸, 코어 목록의 `display_name` 도 빈 값(RG 476H, 2026-11-04).
+
+**원인**
+- 기본 자료(`<dataDir>/assets` · `<dataDir>/info` …)는 APK 안에 있고, 설정의 `bundle_assets_extract_version_current` 가 `_last_version` 과 다를 때만 푼다
+  (`menu/menu_driver.c` 의 `rarch_menu_init`).
+- `current` 와 APK 경로(`bundle_assets_src_path`)를 적는 것은 **아이콘으로 켤 때의 첫 화면**(`UserPreferences.updateConfigFile`)뿐이다.
+  해방런처 · ES-DE 처럼 `RetroActivityFuture` 를 바로 켜면 이 단계를 건너뛴다. 공식 RetroArch 도 같다.
+- 그 기기에서는 앱이 새로 설치돼(내부 폴더가 빔) 자료가 없었다. 그런데 설정 파일은 옛 설치 것을 adb 로 되돌려 둔 사본이라
+  `current == last`(옛 버전 번호)였다. 그래서 RetroArch 는 '이미 풀었다'고 보았다.
+- 게다가 그 사본은 주인이 셸(uid 2000) · 644 라 앱이 쓰지 못했다. 아이콘으로 켜도 새 번호를 적지 못하고, 메뉴에서 바꾼 설정도 저장되지 않았다.
+
+**고침**(hb6, `BundleAssetsCheck` — `RetroActivityFuture.onCreate` 맨 앞, RetroArch 가 설정을 읽기 전)
+- 설정 파일(`CONFIGFILE`, 없으면 기본 자리)을 앱이 쓸 수 없으면 같은 내용으로 다시 만들어 앱 것으로 바꾼다. 폴더가 앱 것이라 지우고 이름을 바꿀 수 있다.
+- 이 APK 버전으로 아직 안 풀었으면 `current` · APK 경로 · 푸는 자리를 적는다(첫 화면이 하던 일). 이미 준비돼 있으면 건드리지 않는다.
+- 버전은 같은데 `<dataDir>/assets` 가 없거나 `<dataDir>/info` 가 비었으면 `last` 를 0 으로 되돌려 다시 풀게 한다.
+- `bundle_assets_extract_enable = false` 는 따른다. logcat 태그는 `HBAssets`.
 
 ## 알림 허용 창 (안드로이드 13+)
 

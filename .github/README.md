@@ -127,10 +127,10 @@ python haebang\build.py        # → haebang\out\HBRetroArch-1.22.2-<hb 번호>.
 - `pkg/android/phoenix/build.gradle` — 맛 `haebang`
 - `input/drivers/android_input.c` — 동시 입력
 - `MainMenuActivity.java` — 안드로이드 13+ 에서 아이콘으로 켤 때 알림 허용 창이 덮여 매번 다시 뜨던 것
-- `RetroActivityFuture.java` — 120Hz 화면의 주기적 끊김
+- `RetroActivityFuture.java` — 120Hz 화면의 주기적 끊김, 프론트엔드로 바로 켤 때도 기본 자료(글꼴 · 아이콘) 풀기
 
 나머지는 새 파일입니다. 대부분은 `pkg/android/phoenix/haebang/` 과 `haebang/` 에 있습니다.
-`NotificationPromptGate.java` 는 `MainMenuActivity.java` 옆에, `DisplayRefreshMatch.java` 는 `RetroActivityFuture.java` 옆에 있습니다.
+`NotificationPromptGate.java` 는 `MainMenuActivity.java` 옆에, `DisplayRefreshMatch.java` · `BundleAssetsCheck.java` 는 `RetroActivityFuture.java` 옆에 있습니다.
 
 ## 업스트림 따라가기
 

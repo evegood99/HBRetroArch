@@ -57,8 +57,10 @@ public final class RetroActivityFuture extends RetroActivityCamera {
 
   @Override
   public void onCreate(Bundle savedInstanceState) {
+    // HB: RetroArch 가 설정을 읽기 전에 — 바로 켤 때도 기본 자료(글꼴 · 아이콘 · 코어 정보)를 풀게 한다(BundleAssetsCheck)
+    BundleAssetsCheck.apply(this, getIntent().getStringExtra("CONFIGFILE"));
     super.onCreate(savedInstanceState);
-    
+
     isRunning = true;
     mDecorView = getWindow().getDecorView();
 
