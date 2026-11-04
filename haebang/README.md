@@ -14,13 +14,16 @@
 | 코어 받기를 바깥에서 | 없음(`CoreSideloadActivity` 는 파일 복사 후 RetroArch 를 켬) | `content call … install` |
 | 패드 버튼 동시 입력 | 둘째 버튼이 다음 프레임에 들어감(격투 · 아케이드 동시 입력 실패) | 같은 프레임에 들어감(입력 스레드) |
 | 120Hz 같은 높은 주사율 화면 | 시스템 기본 모드로 돌아 틈틈이 끊김(1칸 · 3칸 엇갈림) | 화면 모드를 `video_refresh_rate`(기본 60)에 맞춤 |
+| 스레드된 비디오 + 슬립 · 홈에서 돌아오기 | 안드로이드 13 에서 SIGSEGV 로 죽음 | 그대로 이어짐(영상 스레드를 JVM 에 붙임) |
+| 살아 있을 때 다른 게임 요청 | 끝나기만 함(한 번 더 눌러야 뜸) | 새 작업으로 다시 띄움(업스트림 #18587) |
 | 바탕 | v1.22.2 | v1.22.2 + `pkg/android/phoenix/haebang/` + `input/drivers/android_input.c` + 첫 화면 알림 창 기다리기 |
 
-고친 업스트림 파일은 넷이다.
+고친 업스트림 파일은 다섯이다.
 - `pkg/android/phoenix/build.gradle` — 맛 `haebang`
 - `input/drivers/android_input.c` — 동시 입력
+- `gfx/video_thread_wrapper.c` — 영상 스레드를 JVM 에 붙이기 (몇 줄)
 - `pkg/android/phoenix/src/com/retroarch/browser/mainmenu/MainMenuActivity.java` — 알림 허용 창 기다리기 (몇 줄)
-- `pkg/android/phoenix/src/com/retroarch/browser/retroactivity/RetroActivityFuture.java` — 화면 주사율 맞추기 · 기본 자료 풀기 (몇 줄)
+- `pkg/android/phoenix/src/com/retroarch/browser/retroactivity/RetroActivityFuture.java` — 화면 주사율 맞추기 · 기본 자료 풀기 · 다른 게임 다시 띄우기 (몇 줄)
 
 나머지는 모두 새 파일이다:
 
@@ -225,6 +228,37 @@ adb shell logcat -s HBRefresh   # 고른 모드
 - 버전은 같은데 `<dataDir>/assets` 가 없거나 `<dataDir>/info` 가 비었으면 `last` 를 0 으로 되돌려 다시 풀게 한다.
 - `bundle_assets_extract_enable = false` 는 따른다. logcat 태그는 `HBAssets`.
 
+## 슬립 · 홈에서 돌아올 때 (스레드된 비디오)
+
+**증상**: '스레드된 비디오'(`video_threaded = true`)를 켜 두면, 게임 중 슬립했다 깨우거나 홈에 나갔다 돌아오는 순간 RetroArch 가 죽는다
+(RG 476H · 안드로이드 13, Vulkan · GL 모두, 공식 1.22.2 도 같음, 2026-11-04 HB런처 세션 인계).
+
+```
+Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0 in tid … (Thread-2)
+#00 libandroid_runtime.so (… nativeSetTransactionHangCallback(…)::$_1 …)
+#01 libgui.so (android::BLASTBufferQueue::~BLASTBufferQueue()+372)
+#06 libvulkan.so (vulkan::driver::DestroySurfaceKHR(…)+72)
+#07 libretroarch-activity.so (vulkan_context_destroy+96)      ← GL 이면 egl_destroy
+```
+
+**원인**
+- 깨우거나 돌아오면 창 표면이 새로 만들어지고, RetroArch 는 영상 드라이버를 내렸다 다시 올린다.
+- 스레드된 비디오에서는 그 일을 영상 스레드(`gfx/video_thread_wrapper.c` 의 `video_thread_loop`)가 한다.
+  이 스레드는 JVM 에 붙지 않은 채 VkSurface/EGLSurface 를 지우고, 그때 `ANativeWindow` 의 마지막 참조가 풀린다.
+- 안드로이드 13 의 `BLASTBufferQueue` 소멸자는 JNI 전역 참조를 지우느라 `JNIEnv` 를 찾는데, JVM 에 안 붙은 스레드에서는 NULL 이라 죽는다.
+- 스레드를 끄면 메인 스레드(시작할 때 JVM 에 붙음)가 같은 일을 해서 괜찮았다.
+
+**고침**(hb7) — `video_thread_loop` 맨 앞에서 안드로이드면 `jni_thread_getenv()` 로 JVM 에 붙인다. 스레드가 끝날 때는
+`thread_key` 소멸자(`jni_thread_destruct`)가 뗀다. 표면을 지우는 다른 스레드는 없다(코어 브릿지 · 입력 스레드 · Vulkan 우편함 스레드는 표면을 놓지 않음).
+
+## 다른 게임 요청 (`onNewIntent`)
+
+1.22 의 게임 화면은 살아 있을 때 실행 요청을 다시 받으면, 같은 게임이면 앞으로 가져오고 다른 게임이면 `finish()` + `System.exit(0)` 로 끝나기만 했다.
+다시 보내지 않는 프런트엔드(Pegasus 등)는 다른 게임을 한 번 더 눌러야 했다.
+
+**고침**(hb7, 업스트림 #18587 과 같음) — 다른 게임이면 같은 요청을 새 작업(`NEW_TASK | CLEAR_TASK`)으로 다시 띄우고 끝낸다.
+해방런처는 끝나 돌아오면 한 번 더 보내는데(1.22.x), 그 길은 쓰이지 않게 될 뿐 그대로 둬도 된다.
+
 ## 알림 허용 창 (안드로이드 13+)
 
 코어를 받을 때 진행 알림을 띄우려고 알림 채널을 만든다(`CoreInstallService`).
@@ -251,7 +285,7 @@ adb shell logcat -s HBRefresh   # 고른 모드
 ```sh
 git remote add upstream https://github.com/libretro/RetroArch.git   # 한 번만
 git fetch upstream tag v1.23.0
-git rebase --onto v1.23.0 v1.22.2 haebang   # 고친 업스트림 파일은 build.gradle · android_input.c · MainMenuActivity.java · RetroActivityFuture.java(.github/README.md 는 새 파일)
+git rebase --onto v1.23.0 v1.22.2 haebang   # 고친 업스트림 파일은 build.gradle · android_input.c · video_thread_wrapper.c · MainMenuActivity.java · RetroActivityFuture.java(.github/README.md 는 새 파일)
 git push --force-with-lease origin haebang
 ```
 

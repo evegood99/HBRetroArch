@@ -31,6 +31,8 @@ HB RetroArch 는 RetroArch 1.22.2 에 공급자(ContentProvider) 하나를 더�
 | 바깥에서 코어 받기 | 불가 | `content call … install` |
 | 패드 버튼 동시 입력 | 둘째 버튼이 다음 프레임에 들어가 격투 · 아케이드 게임의 동시 입력이 자주 실패 | 같은 프레임에 들어갑니다(입력 스레드) |
 | 120Hz 같은 높은 주사율 화면 | 화면이 120Hz 로 돌아 게임이 틈틈이 끊겨 보임 | 화면을 RetroArch 의 화면 주사율 설정(기본 60Hz)에 맞춥니다 |
+| '스레드된 비디오'를 켜고 슬립 · 홈에서 돌아오기 | 안드로이드 13 에서 RetroArch 가 죽음 | 게임이 그대로 이어집니다 |
+| 게임 중 프론트엔드에서 다른 게임 고르기 | RetroArch 가 끝나기만 해서 한 번 더 골라야 뜸 | 한 번에 새 게임이 뜹니다 |
 | ABI | 빌드마다 다름 | arm64-v8a + armeabi-v7a (한 APK) |
 | 세이브 · 스테이트 · BIOS · 재생목록 | `/storage/emulated/0/RetroArch` | **같은 폴더를 함께 씁니다** |
 | 설정(retroarch.cfg) · 코어 | 앱마다 | 따로입니다(`Android/data/com.haebang.retroarch/files`) |
@@ -113,6 +115,17 @@ adb shell "content query --uri 'content://com.haebang.retroarch.cores/jobs?forma
   - 120Hz 그대로: 1칸 · 3칸 엇갈림 1,388번
   - 60Hz 모드: 0번
 
+## 슬립 · 홈에서 돌아올 때 꺼지던 문제 (스레드된 비디오)
+
+설정의 '스레드된 비디오'(`video_threaded`)를 켜 두면, 게임 중 전원 버튼으로 슬립했다 깨우거나 홈에 나갔다 돌아오는 순간
+RetroArch 가 꺼지는 문제입니다(안드로이드 13, Vulkan · GL 모두). 공식 RetroArch 도 같습니다.
+
+- **원인**
+  - 돌아올 때 화면이 새로 만들어지고, RetroArch 는 옛 화면을 놓고 영상 드라이버를 다시 올립니다.
+  - 스레드된 비디오에서는 영상 전용 스레드가 옛 화면을 놓습니다. 그런데 이 스레드는 안드로이드 자바 쪽(JVM)에 붙어 있지 않습니다.
+  - 안드로이드 13 은 화면을 놓을 때 자바 쪽 자료도 함께 지우는데, 붙지 않은 스레드에서는 그 일을 못 하고 죽습니다.
+- **고침**: 영상 스레드를 시작할 때 JVM 에 붙입니다. 스레드가 끝나면 자동으로 뗍니다.
+
 ## 소스에서 빌드
 
 ```powershell
@@ -123,11 +136,12 @@ python haebang\build.py        # → haebang\out\HBRetroArch-1.22.2-<hb 번호>.
 - 메뉴 그림 · 코어 정보 · 셰이더 같은 assets 는 RetroArch 저장소에 없습니다. `build.py` 가 같은 버전 공식 APK 에서 풀어 넣습니다.
 - 서명 열쇠는 처음 빌드할 때 `haebang/keystore/` 에 만듭니다. git 에는 올리지 않습니다.
 
-고친 업스트림 파일은 넷입니다.
+고친 업스트림 파일은 다섯입니다.
 - `pkg/android/phoenix/build.gradle` — 맛 `haebang`
 - `input/drivers/android_input.c` — 동시 입력
+- `gfx/video_thread_wrapper.c` — 스레드된 비디오에서 슬립 · 홈에서 돌아올 때 꺼지던 것
 - `MainMenuActivity.java` — 안드로이드 13+ 에서 아이콘으로 켤 때 알림 허용 창이 덮여 매번 다시 뜨던 것
-- `RetroActivityFuture.java` — 120Hz 화면의 주기적 끊김, 프론트엔드로 바로 켤 때도 기본 자료(글꼴 · 아이콘) 풀기
+- `RetroActivityFuture.java` — 120Hz 화면의 주기적 끊김, 프론트엔드로 바로 켤 때도 기본 자료(글꼴 · 아이콘) 풀기, 다른 게임을 고르면 한 번에 다시 띄우기(업스트림 #18587)
 
 나머지는 새 파일입니다. 대부분은 `pkg/android/phoenix/haebang/` 과 `haebang/` 에 있습니다.
 `NotificationPromptGate.java` 는 `MainMenuActivity.java` 옆에, `DisplayRefreshMatch.java` · `BundleAssetsCheck.java` 는 `RetroActivityFuture.java` 옆에 있습니다.

@@ -85,8 +85,11 @@ public final class RetroActivityFuture extends RetroActivityCamera {
     // Check if we're trying to launch different content  
     if ((newRom != null && !newRom.equals(currentRom)) ||
         (newCore != null && !newCore.equals(currentCore))) {
-      // Different game content - exit cleanly and let launcher restart us
-      finish();
+      // HB: 업스트림 #18587 — 새 작업으로 다시 띄운 뒤 끝낸다. 끝내기만 하면 다시 보내지 않는
+      // 프런트엔드(Pegasus 등)는 다른 게임을 한 번 더 눌러야 했다.
+      Intent restartIntent = new Intent(intent);
+      restartIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+      startActivity(restartIntent);
       System.exit(0);
     } else {
       // Same content, just update intent
