@@ -36,6 +36,10 @@
 #include "../runloop.h"
 #include "../verbosity.h"
 
+#ifdef ANDROID
+#include "../frontend/drivers/platform_unix.h"
+#endif
+
 static void *video_thread_init_never_call(const video_info_t *video,
       input_driver_t **input, void **input_data)
 {
@@ -419,6 +423,15 @@ static void video_thread_loop(void *data)
    thread_packet_t pkt;
    bool updated;
    thread_video_t *thr = (thread_video_t*)data;
+
+#ifdef ANDROID
+   /* HB: attach this thread to the JVM. It destroys the VkSurface/EGLSurface,
+    * which can drop the last reference to the ANativeWindow; on Android 13
+    * the BLASTBufferQueue destructor then needs a JNIEnv and crashes
+    * (SIGSEGV, fault addr 0) on a detached thread - waking from sleep or
+    * coming back from home. The thread_key destructor detaches on exit. */
+   jni_thread_getenv();
+#endif
 
    for (;;)
    {
