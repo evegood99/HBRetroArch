@@ -25,8 +25,9 @@ import java.util.Map;
 /**
  * 바깥(해방툴의 adb · HB런처 같은 기기 안 앱)이 코어를 보고 받게 하는 코어 브릿지.
  *
- * 읽기 — content://<패키지>.cores/{info|cores|jobs|available}
+ * 읽기 — content://<패키지>.cores/{info|cores|jobs|available|saves}
  *   ?core=snes9x  한 코어만 · ?format=json  한 줄 'json' 칸에 JSON 으로 · ?refresh=1  (available) 목록을 지금 받음
+ *   saves?core=snes9x&rom=<롬 전체 경로>  그 게임의 롬저장 · 상태저장 폴더(SaveDirs) — 둘 다 없으면 기본 폴더 · 정렬 설정만
  * 부르기 — call(method, arg, extras)
  *   ping · info · install(arg=코어들, force) · update(arg=코어들 또는 빈 값=깔린 것 전부) · job(arg=번호) · cancel(arg=번호)
  *   refresh_index · install_file(arg=기기 안 경로, name) · delete(arg=코어)
@@ -38,7 +39,8 @@ public class CoreBridgeProvider extends ContentProvider
 {
    private static final String[] CORE_COLUMNS = {
          "core", "file", "path", "size", "mtime", "crc32", "abi", "abi_ok",
-         "display_name", "system_name", "extensions", "core_version", "firmware_count" };
+         "display_name", "system_name", "extensions", "core_version", "firmware_count",
+         "corename", "savestate" };
    private static final String[] JOB_COLUMNS = {
          "id", "core", "source", "state", "progress", "bytes", "total", "error", "note", "crc32", "created", "finished" };
    private static final String[] AVAILABLE_COLUMNS = {
@@ -89,9 +91,15 @@ public class CoreBridgeProvider extends ContentProvider
             cols = AVAILABLE_COLUMNS;
             rows = available(only, "1".equals(uri.getQueryParameter("refresh")));
          }
+         else if ("saves".equals(table))
+         {
+            JSONObject o = saves(only, uri.getQueryParameter("rom"), uri.getQueryParameter("config"));
+            cols = names(o);
+            rows = new JSONArray().put(o);
+         }
          else
          {
-            throw new IllegalArgumentException("unknown table: " + table + " (info · cores · jobs · available)");
+            throw new IllegalArgumentException("unknown table: " + table + " (info · cores · jobs · available · saves)");
          }
          return json ? jsonCursor(rows) : cursor(cols, rows);
       }
@@ -128,6 +136,7 @@ public class CoreBridgeProvider extends ContentProvider
       Context ctx = getContext();
       JSONObject o = new JSONObject();
       o.put("api_version", CoreStore.API_VERSION);
+      o.put("caps", CoreStore.CAPS);
       o.put("package", ctx.getPackageName());
       o.put("version_name", st.versionName());
       o.put("version_code", st.versionCode());
@@ -165,9 +174,34 @@ public class CoreBridgeProvider extends ContentProvider
          o.put("extensions", str(info.get("supported_extensions")));
          o.put("core_version", str(info.get("display_version")));
          o.put("firmware_count", str(info.get("firmware_count")));
+         o.put("corename", str(info.get("corename")));
+         o.put("savestate", str(info.get("savestate")));
          rows.put(o);
       }
       return rows;
+   }
+
+   /**
+    * 그 게임의 롬저장 · 상태저장 폴더(SaveDirs). 설정은 기본 retroarch.cfg —
+    * config= 로 다른 .cfg 를 줄 수 있다(런처가 CONFIGFILE 로 넘기는 파일, 시험 사본).
+    */
+   private JSONObject saves(String core, String rom, String config) throws JSONException
+   {
+      String path = store().configPath();
+      if (config != null && !config.isEmpty())
+      {
+         if (!config.endsWith(".cfg"))
+            throw new IllegalArgumentException("config must be a .cfg file: " + config);
+         path = config;
+      }
+      try
+      {
+         return SaveDirs.resolve(store(), path, core, rom);
+      }
+      catch (RuntimeException e)
+      {
+         return new JSONObject().put("ok", false).put("error", String.valueOf(e.getMessage()));
+      }
    }
 
    private JSONArray jobs(String only) throws JSONException
@@ -262,6 +296,7 @@ public class CoreBridgeProvider extends ContentProvider
       if ("ping".equals(method))
       {
          r.put("api_version", CoreStore.API_VERSION);
+         r.put("caps", CoreStore.CAPS);
          r.put("version_name", st.versionName());
          return;
       }
