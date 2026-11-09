@@ -59,6 +59,8 @@ public final class RetroActivityFuture extends RetroActivityCamera {
   public void onCreate(Bundle savedInstanceState) {
     // HB: RetroArch 가 설정을 읽기 전에 — 바로 켤 때도 기본 자료(글꼴 · 아이콘 · 코어 정보)를 풀게 한다(BundleAssetsCheck)
     BundleAssetsCheck.apply(this, getIntent().getStringExtra("CONFIGFILE"));
+    // HB: 상태저장 그림을 설정 파일마다 한 번 켠다(해방런처 세이브 창)
+    SavestateThumbDefault.apply(this, getIntent().getStringExtra("CONFIGFILE"));
     super.onCreate(savedInstanceState);
 
     isRunning = true;
@@ -82,9 +84,11 @@ public final class RetroActivityFuture extends RetroActivityCamera {
     String currentCore = currentIntent != null ? currentIntent.getStringExtra("LIBRETRO") : null;
     
     
-    // Check if we're trying to launch different content  
+    // Check if we're trying to launch different content
+    // HB: 같은 게임이라도 ENTRYSLOT(그 상태저장에서 시작)이 오면 다시 띄운다 — 그대로 두면 이어 하기가 된다.
     if ((newRom != null && !newRom.equals(currentRom)) ||
-        (newCore != null && !newCore.equals(currentCore))) {
+        (newCore != null && !newCore.equals(currentCore)) ||
+        (newRom != null && entrySlot(intent) != null)) {
       // HB: 업스트림 #18587 — 새 작업으로 다시 띄운 뒤 끝낸다. 끝내기만 하면 다시 보내지 않는
       // 프런트엔드(Pegasus 등)는 다른 게임을 한 번 더 눌러야 했다.
       Intent restartIntent = new Intent(intent);
@@ -95,6 +99,17 @@ public final class RetroActivityFuture extends RetroActivityCamera {
       // Same content, just update intent
       setIntent(intent);
     }
+  }
+
+  /** HB: ENTRYSLOT — "auto" · "0" · 앞자리 0 없는 1~999 만(네이티브 hb_entry_slot_valid 와 같다). 그 밖은 null. */
+  private static String entrySlot(Intent intent) {
+    String v = intent.getStringExtra("ENTRYSLOT");
+    if (v == null)
+      return null;
+    if (v.equals("auto") || v.matches("0|[1-9][0-9]{0,2}"))
+      return v;
+    Log.w("HBEntrySlot", "Ignoring ENTRYSLOT \"" + v + "\"");
+    return null;
   }
 
   @Override

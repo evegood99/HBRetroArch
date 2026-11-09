@@ -1422,7 +1422,8 @@
 #define DEFAULT_SAVESTATE_AUTO_LOAD false
 
 /* Take screenshots for save states */
-#if defined(__x86_64__)
+/* HB: Android too - HB Launcher's save panel shows the save state thumbnails */
+#if defined(__x86_64__) || defined(ANDROID)
 #define DEFAULT_SAVESTATE_THUMBNAIL_ENABLE true
 #else
 #define DEFAULT_SAVESTATE_THUMBNAIL_ENABLE false
