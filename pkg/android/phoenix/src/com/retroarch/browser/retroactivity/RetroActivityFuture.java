@@ -12,6 +12,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
+import android.os.PowerManager;
 import com.retroarch.browser.preferences.util.ConfigFile;
 import com.retroarch.browser.preferences.util.UserPreferences;
 import java.lang.reflect.InvocationTargetException;
@@ -127,8 +128,45 @@ public final class RetroActivityFuture extends RetroActivityCamera {
     return null;
   }
 
+  // HB: 나갈 때 저장(롬저장 · AUTOSAVESTATE 의 .state.auto)은 onSaveInstanceState(onStop 뒤)에서 한다.
+  // 슬립이면 그때 화면은 이미 꺼져 기기가 잠들 수 있다 — onPause 부터 그 저장이 끝날 때까지(길어야 30초) CPU 를 깨워 둔다.
+  private PowerManager.WakeLock leaveWakeLock;
+
+  private void holdForLeave(boolean hold) {
+    try {
+      if (hold) {
+        if (leaveWakeLock == null) {
+          PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+          leaveWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "HBRetroArch:leave");
+          leaveWakeLock.setReferenceCounted(false);
+        }
+        leaveWakeLock.acquire(30000);
+      } else if (leaveWakeLock != null && leaveWakeLock.isHeld()) {
+        leaveWakeLock.release();
+      }
+    } catch (RuntimeException e) {
+      Log.w("HBLeaveSave", "wake lock: " + e);
+    }
+  }
+
+  @Override
+  public void onPause() {
+    holdForLeave(true);
+    super.onPause();
+  }
+
+  @Override
+  protected void onSaveInstanceState(Bundle outState) {
+    try {
+      super.onSaveInstanceState(outState);
+    } finally {
+      holdForLeave(false);
+    }
+  }
+
   @Override
   public void onResume() {
+    holdForLeave(false);
     super.onResume();
 
     setSustainedPerformanceMode(sustainedPerformanceMode);
@@ -171,6 +209,7 @@ public final class RetroActivityFuture extends RetroActivityCamera {
 
   @Override
   public void onDestroy() {
+    holdForLeave(false);
     super.onDestroy();
     isRunning = false;
   }

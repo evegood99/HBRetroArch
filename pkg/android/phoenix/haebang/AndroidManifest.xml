@@ -4,6 +4,8 @@
     package="com.retroarch">
 
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- 슬립으로 나갈 때 저장(onSaveInstanceState)이 끝날 때까지 CPU 를 깨워 둔다(RetroActivityFuture) -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- install_file · delete 를 셸 밖에서 부를 앱(같은 열쇠로 서명한 앱)에게 주는 권한 -->
     <permission
