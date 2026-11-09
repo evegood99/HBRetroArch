@@ -29,7 +29,7 @@
 - `input/drivers/android_input.c` — 동시 입력 · 나갈 때 롬저장 · 자동 상태저장 · 명령을 프레임 밖에서 처리
 - `gfx/video_thread_wrapper.c` — 영상 스레드를 JVM 에 붙이기
 - `pkg/android/phoenix/src/com/retroarch/browser/mainmenu/MainMenuActivity.java` — 알림 허용 창 기다리기
-- `pkg/android/phoenix/src/com/retroarch/browser/retroactivity/RetroActivityFuture.java` — 화면 주사율 맞추기 · 기본 자료 풀기 · 상태저장 그림 켜기 · 다른 게임 / `ENTRYSLOT` 다시 띄우기
+- `pkg/android/phoenix/src/com/retroarch/browser/retroactivity/RetroActivityFuture.java` — 화면 주사율 맞추기 · 기본 자료 풀기 · 상태저장 그림 켜기 · 다른 게임 / `ENTRYSLOT` 다시 띄우기 · 나갈 때 저장 동안 CPU 깨워 두기
 - `config.def.h` — 상태저장 그림 기본값(안드로이드도 켜짐)
 - `frontend/drivers/platform_unix.c` · `retroarch_types.h` · `tasks/task_content.c` · `retroarch.c` · `runloop.h` · `runloop.c` — `ENTRYSLOT` 을 `-e` 로 넘기기 · `-e auto`
 - `frontend/drivers/platform_unix.h` · `command.c` · `command.h` · `content.h` · `tasks/task_save.c` · `tasks/task_screenshot.c` · `tasks/tasks_internal.h`
@@ -433,11 +433,18 @@ RetroArch 의 `savestate_auto_save` 는 콘텐츠를 **닫을 때만** `.state.a
 - **무엇을**: `<상태저장 폴더>/<이름>.state.auto` 와 그림 `….state.auto.png` 를 쓴다(`savestate_thumbnail_enable` 이 켜져 있으면). 현재 슬롯 · 설정은 건드리지 않는다.
 - **건너뛰기**:
   - 마지막 자동 저장 뒤 게임이 1초(게임 시간)도 안 돌았으면 건너뛴다. 홈에서 이미 썼으면 다른 게임 요청 때는 다시 안 쓴다.
+  - 단, 그 사이에 상태를 불러왔거나(슬롯 불러오기 · 되감기 · 불러오기 취소) 리셋했으면 건너뛰지 않는다 —
+    게임 시간은 안 흘러도 장면이 바뀌었다(`content_hb_state_changes`, `content_deserialize_state` · `core_reset` 이 센다).
+    떠 둔 그림(아래)도 같은 까닭으로 버린다.
   - 업적 하드코어 · 넷플레이 · 리플레이 중이면 쓰지 않는다.
+  - 상태저장을 못 하는 코어(MAME 2015 등)는 아무 파일도 쓰지 않는다(로그 `failed in 0 ms`).
 - **끊겨도 안전하게**:
   - 동기로 쓰고, 다 쓴 뒤에 안드로이드에 답한다.
   - 상태는 `….hbtmp` 에 다 쓴 뒤 이름을 바꿔 넣는다. 그림도 같다.
   - 그림을 못 만들면 옛 그림을 지운다(옛 그림이 남으면 다른 장면을 보이게 된다).
+  - 슬립이면 저장할 때(`onSaveInstanceState`, onStop 뒤) 화면은 이미 꺼져 기기가 잠들 수 있다.
+    그래서 `onPause` 부터 그 저장이 끝날 때까지(길어야 30초) 부분 wake lock(`HBRetroArch:leave`)으로 CPU 를 깨워 둔다
+    (`WAKE_LOCK` 권한, haebang 매니페스트). `onResume` · `onDestroy` 에서도 놓는다.
 - **그림**:
   - 소프트웨어 코어(MD · SFC 등)는 메모리에 있는 마지막 프레임에서 바로 만든다(코어 해상도).
   - GPU 로 그리는 코어(N64 · PS1 HW · PS2 · 3DS)는 사정이 다르다.
@@ -464,6 +471,27 @@ RetroArch 의 `savestate_auto_save` 는 콘텐츠를 **닫을 때만** `.state.a
   - 앞에 띄워 둔 게임(N64 포함): 저장한 뒤 새 게임이 뜬다.
 - `ENTRYSLOT auto` 로 그 장면에서 시작했다. 슬립 → 깨우기는 같은 pid 로 이어 했다(Vulkan · GL 스레드된 비디오, hb7 시험).
 
+**넓힌 시험(RG 476H, 같은 날 밤)** — 코어마다 홈 · 슬립 · `ENTRYSLOT auto` · 앞에 띄운 채 다른 게임:
+
+| 코어(게임) | 상태 크기 | 홈 | 슬립 | 앞에 띄운 채 다른 게임 | 그림 |
+|---|---|---|---|---|---|
+| Snes9x(FF Mystic Quest) | 55 KB | 98ms | 78ms | 58ms | 256×224 |
+| FinalBurn Neo(1942) | 2 KB | 144ms | 104ms | 73ms | 256×224 |
+| melonDS DS(Dawn of Sorrow) | 1.3 MB | 818ms | 770ms | 278ms | 256×384 |
+| Flycast(Crazy Taxi, Vulkan) | 5.5 MB | 1,422ms | 1,425ms | 616ms | 떠 둔 그림 426×320 |
+| PPSSPP(Metal Slug XX, Vulkan) | 7.2 MB | 1,959ms | — | 893ms | 떠 둔 그림 426×240 |
+| LRPS2(Gradius V) | 4.8 MB | 2,035ms | 1,894ms | 784ms | 떠 둔 그림 426×320 |
+
+- 뒤로 간 뒤(홈 · 슬립)가 앞에 있을 때보다 2~3배 느리다. 안드로이드가 뒤로 간 앱의 CPU 를 줄이는 몫으로 보인다.
+- 반복: N64 홈 ↔ 이어 하기 10번(806~951ms, 같은 pid), 슬립 ↔ 깨우기 N64 · MD 8번씩 모두 저장.
+- 메뉴를 연 채 홈(MD · Flycast): 그림은 메뉴가 아니라 게임 화면. 알림창을 내렸다 올린 뒤 계속하다 홈(N64): 그림은 새 장면.
+- 그림 끔 → 옛 `.png` 지움. `savestate_auto_save` 켬 + 종료 → 업스트림 자동 저장 한 번만. 메뉴만 켠 채(게임 없음) 홈 → 아무것도 안 함.
+- 상태저장 폴더가 SD 카드여도 이름 바꾸기 덮어쓰기가 된다(두 번). 되감기 · 미리 실행 · 압축 끔 · 남은 `.hbtmp` 도 그대로 된다.
+- 3DS(Azahar)는 가진 롬이 암호화본이라 못 쟀다.
+- **PPSSPP(Vulkan)는 홈에서 돌아올 때 죽는다(hb9 와 상관없음).** 5번 중 4번이고, 나갈 때 저장을 꺼도,
+  명령을 프레임 밖에서 처리하는 것을 뺀 빌드로도 같았다. Vulkan 화면을 다시 만든 뒤 코어가 망가진 함수 포인터를 부른다.
+  코어 옵션 `ppsspp_backend = opengl` 이면 4번 다 이어졌다. 나갈 때 저장은 그 앞에 끝나므로 `ENTRYSLOT auto` 로 이어 할 수 있다.
+
 ## 안드로이드 명령을 코어 프레임 밖에서 (hb9)
 
 안드로이드 생명주기 명령(포커스 · onPause · `onSaveInstanceState` 등)은 RetroArch 의 입력 읽기(`android_input_poll`)가 처리한다.
@@ -477,6 +505,9 @@ RetroArch 의 `savestate_auto_save` 는 콘텐츠를 **닫을 때만** `.state.a
   남은 입력 이벤트는 다음 읽기에서 처리한다.
 - 프레임이 끝나면 쌓인 명령을 차례로 처리한다. 원래 루프처럼 끝내기 · 다시 올리기(`reinitRequested`)도 확인한다.
 - 안드로이드가 답을 기다리는 명령(onPause 등)은 길어야 한 프레임 늦게 답을 받는다.
+- 메뉴 뒤에서 코어가 돌 때(`menu_pause_libretro` 끔, `runloop.c` 의 `display_menu_libretro`)도 같다.
+- 명령이 아닌 다른 JNI 는 그대로다. 476H 의 N64 에서 패드 R3(오른쪽 스틱 누름)을 누르면 `StackOverflowError` 경고가 두 줄 났다
+  (메뉴 · 홈과 상관없이 그 키를 누른 순간, 저장은 됐다). 코어 프레임 안에서 부르는 무언가로 보이며 어느 JNI 인지는 아직 모른다.
 
 ## 알림 허용 창 (안드로이드 13+)
 
