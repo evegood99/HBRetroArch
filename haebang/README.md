@@ -20,16 +20,20 @@
 | 상태저장에서 시작 | 명령줄 `-e N` 뿐(안드로이드 인텐트로는 못 넘김) | 인텐트 `ENTRYSLOT`(슬롯 번호 · `auto`), 같은 게임이 떠 있어도 다시 띄움 |
 | 세이브 폴더를 바깥에서 | 앱 전용 설정 파일이라 짐작만 | 코어 브릿지 `saves` 조회 |
 | 홈 · 슬립으로 나갈 때 롬저장 | `autosave_interval`(기본 10초)마다만 씀 | 바로 씀 |
+| 나갈 때 자동 상태저장 | 콘텐츠를 닫을 때만(`savestate_auto_save`) | 인텐트 `AUTOSAVESTATE=1` 이면 홈 · 슬립 · 다른 게임 · 끝낼 때 `.state.auto` + 그림 |
+| 안드로이드 명령(포커스 · 저장 등) | 코어가 프레임을 도는 도중(`retro_run` 안 입력 읽기)에도 처리 | 프레임이 끝난 뒤 처리 |
 | 바탕 | v1.22.2 | v1.22.2 + `pkg/android/phoenix/haebang/` + `input/drivers/android_input.c` + 첫 화면 알림 창 기다리기 |
 
-고친 업스트림 파일은 열둘이다(대부분 몇 줄).
+고친 업스트림 파일은 열아홉이다(대부분 몇 줄).
 - `pkg/android/phoenix/build.gradle` — 맛 `haebang`
-- `input/drivers/android_input.c` — 동시 입력 · 나갈 때 롬저장 쓰기
+- `input/drivers/android_input.c` — 동시 입력 · 나갈 때 롬저장 · 자동 상태저장 · 명령을 프레임 밖에서 처리
 - `gfx/video_thread_wrapper.c` — 영상 스레드를 JVM 에 붙이기
 - `pkg/android/phoenix/src/com/retroarch/browser/mainmenu/MainMenuActivity.java` — 알림 허용 창 기다리기
 - `pkg/android/phoenix/src/com/retroarch/browser/retroactivity/RetroActivityFuture.java` — 화면 주사율 맞추기 · 기본 자료 풀기 · 상태저장 그림 켜기 · 다른 게임 / `ENTRYSLOT` 다시 띄우기
 - `config.def.h` — 상태저장 그림 기본값(안드로이드도 켜짐)
 - `frontend/drivers/platform_unix.c` · `retroarch_types.h` · `tasks/task_content.c` · `retroarch.c` · `runloop.h` · `runloop.c` — `ENTRYSLOT` 을 `-e` 로 넘기기 · `-e auto`
+- `frontend/drivers/platform_unix.h` · `command.c` · `command.h` · `content.h` · `tasks/task_save.c` · `tasks/task_screenshot.c` · `tasks/tasks_internal.h`
+  (+ 위의 `platform_unix.c` · `retroarch.c` · `runloop.c`) — 나갈 때 자동 상태저장(`AUTOSAVESTATE`)
 
 나머지는 모두 새 파일이다:
 
@@ -81,6 +85,7 @@ python haebang\build.py
 - `entry_slot` — 인텐트 `ENTRYSLOT`
 - `saves` — `saves` 조회
 - `thumb_default` — 상태저장 그림 기본 켜짐
+- `autosave_leave` — 인텐트 `AUTOSAVESTATE`(나갈 때 자동 상태저장, hb9)
 
 ### 읽기 — `content query`
 
@@ -247,6 +252,9 @@ am start -n com.haebang.retroarch/com.retroarch.browser.retroactivity.RetroActiv
   -e ROM <롬> -e LIBRETRO <코어> -e CONFIGFILE <설정> -e ENTRYSLOT 2
 ```
 
+**나갈 때 자동 상태저장 — `-e AUTOSAVESTATE 1`**(hb9, 글자 추가값) — 아래 '나갈 때 자동 상태저장'. `ENTRYSLOT` 과 함께 줄 수 있다.
+값은 `"1"` 만 켬이다. 다른 값 · 없음이면 예전처럼 `savestate_auto_save` 설정만 따른다.
+
 ## 패드 버튼 동시 입력 (입력 스레드)
 
 안드로이드 RetroArch 에서 두 버튼을 동시에 눌러도 게임이 동시 입력으로 받지 못하는 문제
@@ -408,6 +416,68 @@ RetroArch 가 그 게임으로 뒤에 떠 있는 일이 흔하다. 다시 띄우
 
 60Hz 한 칸(16.7ms)을 넘는 멈춤은 없었다. 큰 코어(PS2 · 3DS 등)는 상태저장 자체가 더 오래 걸리지만, 그림이 더하는 몫은 화면 한 장을 읽는 일이다.
 
+## 나갈 때 자동 상태저장 (hb9, `AUTOSAVESTATE`)
+
+해방런처의 '나갈 때 자동 상태저장' 옵션용이다(2026-11-09 사용자 요청, HB런처 세션 인계).
+RetroArch 의 `savestate_auto_save` 는 콘텐츠를 **닫을 때만** `.state.auto` 를 쓴다. 해방런처는 QUITFOCUS 를 넘기지 않아,
+홈으로 돌아가도 RetroArch 가 뒤에 살아 있어 '닫기'가 일어나지 않았다.
+
+**언제** — 인텐트 `AUTOSAVESTATE` 가 `"1"` 이면(현재 인텐트를 그때마다 읽는다), `savestate_auto_save` 와 상관없이 다음 넷 모두에서 쓴다.
+
+| 언제 | 자리 |
+|---|---|
+| 홈 · 슬립 | `onSaveInstanceState` → `APP_CMD_SAVE_STATE` — hb8 의 롬저장 쓰기 뒤 |
+| 다른 게임 · `ENTRYSLOT` 으로 다시 띄울 때 | Java `onNewIntent` 가 `hbNativeLeaveSave()` 를 부르고 끝날 때까지(최대 5초) 기다린다(`APP_CMD_HB_LEAVE_SAVE`) |
+| 정상 종료 · 콘텐츠 닫기 | `retroarch.c` 의 자동 상태저장 세 자리 |
+
+- **무엇을**: `<상태저장 폴더>/<이름>.state.auto` 와 그림 `….state.auto.png` 를 쓴다(`savestate_thumbnail_enable` 이 켜져 있으면). 현재 슬롯 · 설정은 건드리지 않는다.
+- **건너뛰기**:
+  - 마지막 자동 저장 뒤 게임이 1초(게임 시간)도 안 돌았으면 건너뛴다. 홈에서 이미 썼으면 다른 게임 요청 때는 다시 안 쓴다.
+  - 업적 하드코어 · 넷플레이 · 리플레이 중이면 쓰지 않는다.
+- **끊겨도 안전하게**:
+  - 동기로 쓰고, 다 쓴 뒤에 안드로이드에 답한다.
+  - 상태는 `….hbtmp` 에 다 쓴 뒤 이름을 바꿔 넣는다. 그림도 같다.
+  - 그림을 못 만들면 옛 그림을 지운다(옛 그림이 남으면 다른 장면을 보이게 된다).
+- **그림**:
+  - 소프트웨어 코어(MD · SFC 등)는 메모리에 있는 마지막 프레임에서 바로 만든다(코어 해상도).
+  - GPU 로 그리는 코어(N64 · PS1 HW · PS2 · 3DS)는 사정이 다르다.
+    - 뒤로 간 뒤에는 화면(표면)이 없어 GPU 읽기가 실패하거나 검은 그림을 '성공'으로 준다.
+      Vulkan 은 예전 읽기의 그림을 줄 수도 있고, 몇 초를 기다리기도 했다.
+    - 그래서 화면이 아직 있는 `onPause`(포커스 잃음보다 먼저 온다)와 포커스 잃음에서 화면을 메모리로 떠 두고,
+      저장할 때 그 뒤로 게임 시간 1초 안이면 그 그림을 쓴다.
+    - 앞에 떠 있을 때(다시 띄우기 · 종료)는 그 자리에서 뜬다.
+    - 화면 크기 그대로면 PNG 를 쓰는 데만 3초가 넘게 걸려서(N64 1280×960), 폭 480 안팎으로 줄여 쓴다(N64 426×320).
+- logcat 이 아니라 RetroArch 로그에 `[State] HB leave save to "…" succeeded in N ms (thumbnail: screen | kept before leaving | none)` 가 남는다.
+
+**확인(RG 476H, 사본 cfg · `savestate_auto_save = false`)** — 나가는 데 걸린 시간(상태 + 그림, 로그):
+
+| 코어(게임) | 상태 크기 | 홈 | 슬립 | 그림 |
+|---|---|---|---|---|
+| Genesis Plus GX(Alien Soldier) | 22 KB | 212ms | 208ms | 320×224, 나가기 직전 화면과 같음 |
+| SwanStation(Ace Combat 3) | 1.5 MB | 447ms | 466ms | 떠 둔 그림(9~19ms), 축소 |
+| Mupen64Plus-Next GLES3(Banjo-Kazooie) | 1.3 MB | 931ms | 2,334ms | 떠 둔 그림, 426×320 |
+
+- 슬립이 긴 것은 화면이 꺼지며 CPU 가 느려지는 몫으로 보인다.
+- 정상 종료(MD) 94ms. 옵션 없음 → 안 바뀜. 1초 안에 다시 나감 → 건너뜀.
+- 다른 게임 요청은 둘로 나눠 봤다.
+  - 홈에 둔 게임: 이미 저장했으므로 그대로 두고 새 게임이 뜬다.
+  - 앞에 띄워 둔 게임(N64 포함): 저장한 뒤 새 게임이 뜬다.
+- `ENTRYSLOT auto` 로 그 장면에서 시작했다. 슬립 → 깨우기는 같은 pid 로 이어 했다(Vulkan · GL 스레드된 비디오, hb7 시험).
+
+## 안드로이드 명령을 코어 프레임 밖에서 (hb9)
+
+안드로이드 생명주기 명령(포커스 · onPause · `onSaveInstanceState` 등)은 RetroArch 의 입력 읽기(`android_input_poll`)가 처리한다.
+그런데 대부분의 코어는 `retro_run` **도중에** 입력을 읽으므로, 이 명령들이 코어가 한 프레임을 도는 한가운데서 처리될 수 있었다.
+- 상태저장(`retro_serialize`)과 GPU 읽기는 `retro_run` 밖에서 해야 한다.
+- Mupen64Plus-Next 는 자기 스택(libco)에서 입력을 읽어, 거기서 부른 JNI 가 `StackOverflowError` 를 냈다.
+  그래서 슬립 때 `AUTOSAVESTATE` 를 못 읽어 저장이 빠졌다.
+
+**고침**(`android_input.c` · `runloop.c`)
+- `runloop_iterate` 가 코어를 돌리는 동안(`android_hb_core_run_begin` / `_end`)에는, 입력 읽기가 명령 파이프를 만나면 거기서 멈춘다.
+  남은 입력 이벤트는 다음 읽기에서 처리한다.
+- 프레임이 끝나면 쌓인 명령을 차례로 처리한다. 원래 루프처럼 끝내기 · 다시 올리기(`reinitRequested`)도 확인한다.
+- 안드로이드가 답을 기다리는 명령(onPause 등)은 길어야 한 프레임 늦게 답을 받는다.
+
 ## 알림 허용 창 (안드로이드 13+)
 
 코어를 받을 때 진행 알림을 띄우려고 알림 채널을 만든다(`CoreInstallService`).
@@ -434,7 +504,7 @@ RetroArch 가 그 게임으로 뒤에 떠 있는 일이 흔하다. 다시 띄우
 ```sh
 git remote add upstream https://github.com/libretro/RetroArch.git   # 한 번만
 git fetch upstream tag v1.23.0
-git rebase --onto v1.23.0 v1.22.2 haebang   # 고친 업스트림 파일은 맨 위 '고친 업스트림 파일' 열둘(.github/README.md 는 새 파일)
+git rebase --onto v1.23.0 v1.22.2 haebang   # 고친 업스트림 파일은 맨 위 '고친 업스트림 파일' 열아홉(.github/README.md 는 새 파일)
 git push --force-with-lease origin haebang
 ```
 
