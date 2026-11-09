@@ -33,6 +33,9 @@ HB RetroArch 는 RetroArch 1.22.2 에 공급자(ContentProvider) 하나를 더�
 | 120Hz 같은 높은 주사율 화면 | 화면이 120Hz 로 돌아 게임이 틈틈이 끊겨 보임 | 화면을 RetroArch 의 화면 주사율 설정(기본 60Hz)에 맞춥니다 |
 | '스레드된 비디오'를 켜고 슬립 · 홈에서 돌아오기 | 안드로이드 13 에서 RetroArch 가 죽음 | 게임이 그대로 이어집니다 |
 | 게임 중 프론트엔드에서 다른 게임 고르기 | RetroArch 가 끝나기만 해서 한 번 더 골라야 뜸 | 한 번에 새 게임이 뜹니다 |
+| 상태저장 그림 | 안드로이드는 기본으로 만들지 않음 | 기본으로 만듭니다(해방런처 세이브 창에 보임) |
+| 프론트엔드에서 상태저장을 골라 시작 | 안드로이드는 방법이 없음 | 실행 값 `ENTRYSLOT` 으로 그 슬롯에서 시작합니다 |
+| 홈 · 슬립으로 나갈 때 롬저장(.srm) | 마지막 몇 초 몫이 아직 안 써졌을 수 있음(10초마다 씀) | 나가는 순간 씁니다 |
 | ABI | 빌드마다 다름 | arm64-v8a + armeabi-v7a (한 APK) |
 | 세이브 · 스테이트 · BIOS · 재생목록 | `/storage/emulated/0/RetroArch` | **같은 폴더를 함께 씁니다** |
 | 설정(retroarch.cfg) · 코어 | 앱마다 | 따로입니다(`Android/data/com.haebang.retroarch/files`) |
@@ -58,6 +61,8 @@ am start -n com.haebang.retroarch/com.retroarch.browser.retroactivity.RetroActiv
   -e CONFIGFILE /storage/emulated/0/Android/data/com.haebang.retroarch/files/retroarch.cfg
 ```
 
+- **상태저장에서 시작** — `-e ENTRYSLOT 2` 처럼 슬롯 번호(0~999)를 주면 그 상태저장에서 시작합니다. `auto` 는 자동 상태저장입니다.
+  그 게임이 이미 떠 있어도 다시 띄워 그 장면에서 시작합니다(hb8 부터).
 - **ES-DE** — `ES-DE/custom_systems/es_find_rules.xml` 의 `RETROARCH` 항목 맨 앞에
   `com.haebang.retroarch/com.retroarch.browser.retroactivity.RetroActivityFuture` 를 넣습니다.
   ES-DE 를 다시 켜면 이 앱을 먼저 씁니다. 해방툴로 내보내면 자동으로 써 줍니다.
@@ -73,11 +78,13 @@ adb shell "content query --uri 'content://com.haebang.retroarch.cores/cores?form
 # 받기(기기가 buildbot 에서 직접) → 진행은 …/jobs
 adb shell content call --uri content://com.haebang.retroarch.cores --method install --arg snes9x,fbneo
 adb shell "content query --uri 'content://com.haebang.retroarch.cores/jobs?format=json'"
+# 그 게임의 롬저장 · 상태저장 폴더(RetroArch 와 같은 규칙, hb8 부터)
+adb shell "content query --uri 'content://com.haebang.retroarch.cores/saves?format=json&core=snes9x&rom=<롬 경로>'"
 ```
 
 | 할 일 | 누가 쓸 수 있나 |
 |---|---|
-| `info` · `cores` · `jobs` · `available` 읽기, `install` · `update` · `cancel` | 누구나 — 받는 곳은 공식 buildbot(https)으로 고정 |
+| `info` · `cores` · `jobs` · `available` · `saves` 읽기, `install` · `update` · `cancel` | 누구나 — 받는 곳은 공식 buildbot(https)으로 고정 |
 | `install_file`(기기 안 .so / .so.zip 넣기) · `delete` | adb 셸 · root · 같은 서명 권한 `com.haebang.retroarch.permission.MANAGE_CORES` |
 
 전체 규약 · 안드로이드 앱에서 부르는 법은 [haebang/README.md](https://github.com/evegood99/HBRetroArch/blob/haebang/haebang/README.md)에 있습니다.
@@ -126,6 +133,20 @@ RetroArch 가 꺼지는 문제입니다(안드로이드 13, Vulkan · GL 모두)
   - 안드로이드 13 은 화면을 놓을 때 자바 쪽 자료도 함께 지우는데, 붙지 않은 스레드에서는 그 일을 못 하고 죽습니다.
 - **고침**: 영상 스레드를 시작할 때 JVM 에 붙입니다. 스레드가 끝나면 자동으로 뗍니다.
 
+## 상태저장 그림 · 상태저장에서 시작 (hb8)
+
+해방런처의 세이브 창(상태저장을 그림으로 보고 골라서 바로 시작)을 위해 넣었습니다.
+
+- **상태저장 그림**: 상태저장마다 그 순간 화면을 `<상태저장 파일>.png` 로 남깁니다(`Mario.state1.png`).
+  - 공식 안드로이드판은 기본으로 꺼져 있습니다.
+  - HB RetroArch 는 기본으로 켜고, 이미 깐 기기도 처음 한 번 켭니다. 그 뒤 메뉴에서 끄면 그대로 둡니다.
+  - RG 476H 에서 저장할 때 화면이 끊기지 않았습니다(가장 긴 프레임 간격 17ms, 그림을 끈 때와 같음).
+- **상태저장에서 시작**: 실행 값 `ENTRYSLOT` 으로 슬롯 번호(0~999)나 `auto` 를 받습니다(명령줄 `-e` 와 같음).
+  - 그 게임이 이미 떠 있어도 다시 띄워 그 장면에서 시작합니다.
+- **롬저장 바로 쓰기**: 홈 · 슬립으로 나가는 순간 롬저장(.srm)을 씁니다. 공식판은 10초마다만 씁니다.
+- **세이브 폴더 조회**: 코어 브릿지 `saves` 로 그 게임의 롬저장 · 상태저장 폴더를 RetroArch 와 같은 규칙으로 알려 줍니다.
+  설정 파일이 앱 전용 폴더에 있어 다른 앱은 읽을 수 없기 때문입니다.
+
 ## 소스에서 빌드
 
 ```powershell
@@ -136,15 +157,17 @@ python haebang\build.py        # → haebang\out\HBRetroArch-1.22.2-<hb 번호>.
 - 메뉴 그림 · 코어 정보 · 셰이더 같은 assets 는 RetroArch 저장소에 없습니다. `build.py` 가 같은 버전 공식 APK 에서 풀어 넣습니다.
 - 서명 열쇠는 처음 빌드할 때 `haebang/keystore/` 에 만듭니다. git 에는 올리지 않습니다.
 
-고친 업스트림 파일은 다섯입니다.
+고친 업스트림 파일은 열둘입니다(대부분 몇 줄).
 - `pkg/android/phoenix/build.gradle` — 맛 `haebang`
-- `input/drivers/android_input.c` — 동시 입력
+- `input/drivers/android_input.c` — 동시 입력, 홈 · 슬립으로 나갈 때 롬저장 쓰기
 - `gfx/video_thread_wrapper.c` — 스레드된 비디오에서 슬립 · 홈에서 돌아올 때 꺼지던 것
 - `MainMenuActivity.java` — 안드로이드 13+ 에서 아이콘으로 켤 때 알림 허용 창이 덮여 매번 다시 뜨던 것
-- `RetroActivityFuture.java` — 120Hz 화면의 주기적 끊김, 프론트엔드로 바로 켤 때도 기본 자료(글꼴 · 아이콘) 풀기, 다른 게임을 고르면 한 번에 다시 띄우기(업스트림 #18587)
+- `RetroActivityFuture.java` — 120Hz 화면의 주기적 끊김, 프론트엔드로 바로 켤 때도 기본 자료(글꼴 · 아이콘) 풀기, 상태저장 그림 켜기, 다른 게임을 고르면 한 번에 다시 띄우기(업스트림 #18587) · `ENTRYSLOT` 이면 같은 게임도 다시 띄우기
+- `config.def.h` — 안드로이드도 상태저장 그림 기본 켜짐
+- `frontend/drivers/platform_unix.c` · `retroarch_types.h` · `tasks/task_content.c` · `retroarch.c` · `runloop.h` · `runloop.c` — 실행 값 `ENTRYSLOT` 을 명령줄 `-e` 로 넘기기, `-e auto`
 
 나머지는 새 파일입니다. 대부분은 `pkg/android/phoenix/haebang/` 과 `haebang/` 에 있습니다.
-`NotificationPromptGate.java` 는 `MainMenuActivity.java` 옆에, `DisplayRefreshMatch.java` · `BundleAssetsCheck.java` 는 `RetroActivityFuture.java` 옆에 있습니다.
+`NotificationPromptGate.java` 는 `MainMenuActivity.java` 옆에, `DisplayRefreshMatch.java` · `BundleAssetsCheck.java` · `SavestateThumbDefault.java` 는 `RetroActivityFuture.java` 옆에 있습니다.
 
 ## 업스트림 따라가기
 
@@ -162,4 +185,4 @@ python haebang\build.py        # → haebang\out\HBRetroArch-1.22.2-<hb 번호>.
 
 ### English (short)
 
-**HB RetroArch** is an unofficial build of RetroArch 1.22.2 for Android (package `com.haebang.retroarch`, installs alongside the official app). It adds a *core bridge* (`content://com.haebang.retroarch.cores`) through which other apps can list installed cores and ask the app to download cores from the official libretro buildbot. It is not affiliated with or endorsed by libretro. Source is GPLv3; see [haebang/README.md](https://github.com/evegood99/HBRetroArch/blob/haebang/haebang/README.md) for the API and build instructions.
+**HB RetroArch** is an unofficial build of RetroArch 1.22.2 for Android (package `com.haebang.retroarch`, installs alongside the official app). It adds a *core bridge* (`content://com.haebang.retroarch.cores`) through which other apps can list installed cores and ask the app to download cores from the official libretro buildbot, and look up where a game's saves and save states go. Save state thumbnails are on by default, and a frontend can start a game from a save state slot with the `ENTRYSLOT` intent extra (a number or `auto`). It also fixes simultaneous gamepad presses, stutter on 120 Hz screens and a crash when returning from sleep with threaded video. It is not affiliated with or endorsed by libretro. Source is GPLv3; see [haebang/README.md](https://github.com/evegood99/HBRetroArch/blob/haebang/haebang/README.md) for the API and build instructions.

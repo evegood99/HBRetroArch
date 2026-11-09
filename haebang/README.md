@@ -16,14 +16,20 @@
 | 120Hz 같은 높은 주사율 화면 | 시스템 기본 모드로 돌아 틈틈이 끊김(1칸 · 3칸 엇갈림) | 화면 모드를 `video_refresh_rate`(기본 60)에 맞춤 |
 | 스레드된 비디오 + 슬립 · 홈에서 돌아오기 | 안드로이드 13 에서 SIGSEGV 로 죽음 | 그대로 이어짐(영상 스레드를 JVM 에 붙임) |
 | 살아 있을 때 다른 게임 요청 | 끝나기만 함(한 번 더 눌러야 뜸) | 새 작업으로 다시 띄움(업스트림 #18587) |
+| 상태저장 그림 | 안드로이드는 기본 꺼짐 | 기본 켜짐 · 이미 깐 기기도 한 번 켬(해방런처 세이브 창) |
+| 상태저장에서 시작 | 명령줄 `-e N` 뿐(안드로이드 인텐트로는 못 넘김) | 인텐트 `ENTRYSLOT`(슬롯 번호 · `auto`), 같은 게임이 떠 있어도 다시 띄움 |
+| 세이브 폴더를 바깥에서 | 앱 전용 설정 파일이라 짐작만 | 코어 브릿지 `saves` 조회 |
+| 홈 · 슬립으로 나갈 때 롬저장 | `autosave_interval`(기본 10초)마다만 씀 | 바로 씀 |
 | 바탕 | v1.22.2 | v1.22.2 + `pkg/android/phoenix/haebang/` + `input/drivers/android_input.c` + 첫 화면 알림 창 기다리기 |
 
-고친 업스트림 파일은 다섯이다.
+고친 업스트림 파일은 열둘이다(대부분 몇 줄).
 - `pkg/android/phoenix/build.gradle` — 맛 `haebang`
-- `input/drivers/android_input.c` — 동시 입력
-- `gfx/video_thread_wrapper.c` — 영상 스레드를 JVM 에 붙이기 (몇 줄)
-- `pkg/android/phoenix/src/com/retroarch/browser/mainmenu/MainMenuActivity.java` — 알림 허용 창 기다리기 (몇 줄)
-- `pkg/android/phoenix/src/com/retroarch/browser/retroactivity/RetroActivityFuture.java` — 화면 주사율 맞추기 · 기본 자료 풀기 · 다른 게임 다시 띄우기 (몇 줄)
+- `input/drivers/android_input.c` — 동시 입력 · 나갈 때 롬저장 쓰기
+- `gfx/video_thread_wrapper.c` — 영상 스레드를 JVM 에 붙이기
+- `pkg/android/phoenix/src/com/retroarch/browser/mainmenu/MainMenuActivity.java` — 알림 허용 창 기다리기
+- `pkg/android/phoenix/src/com/retroarch/browser/retroactivity/RetroActivityFuture.java` — 화면 주사율 맞추기 · 기본 자료 풀기 · 상태저장 그림 켜기 · 다른 게임 / `ENTRYSLOT` 다시 띄우기
+- `config.def.h` — 상태저장 그림 기본값(안드로이드도 켜짐)
+- `frontend/drivers/platform_unix.c` · `retroarch_types.h` · `tasks/task_content.c` · `retroarch.c` · `runloop.h` · `runloop.c` — `ENTRYSLOT` 을 `-e` 로 넘기기 · `-e auto`
 
 나머지는 모두 새 파일이다:
 
@@ -33,12 +39,14 @@ pkg/android/phoenix/src/com/retroarch/browser/mainmenu/
 pkg/android/phoenix/src/com/retroarch/browser/retroactivity/
   DisplayRefreshMatch.java            화면 모드를 video_refresh_rate 에 맞춤
   BundleAssetsCheck.java              바로 켤 때도 기본 자료(글꼴 · 아이콘 · 코어 정보)를 풀게 함
+  SavestateThumbDefault.java          상태저장 그림을 설정 파일마다 한 번 켬
 pkg/android/phoenix/haebang/
   AndroidManifest.xml                 공급자 · 서비스 · 권한 (본 매니페스트 위에 합쳐짐)
   src/com/haebang/retroarch/
     CoreBridgeProvider.java           content://com.haebang.retroarch.cores
     CoreInstallService.java           받기 대기열(전경 서비스 + 알림)
     CoreStore.java                    코어 폴더 · CRC · buildbot 목록 · 받기 · 설치
+    SaveDirs.java                     그 게임의 롬저장 · 상태저장 폴더(RetroArch 규칙 그대로)
   res/values{,-ko}/strings.xml
 haebang/build.py                      빌드
 ```
@@ -60,18 +68,32 @@ python haebang\build.py
   코어도 그 ABI 것이어야 하며, 코어 브릿지는 실제 ABI(`info.abi`)에 맞는 buildbot 폴더에서 받는다.
 - targetSdk 28 은 공식 웹 배포판과 같다(앱 폴더 코어 로드 · 옛 저장소 권한).
 
-## 코어 브릿지 API (api_version 1)
+## 코어 브릿지 API (api_version 2)
 
 권한(authority): `com.haebang.retroarch.cores`
+
+| api_version | 버전 | 더한 것 |
+|---|---|---|
+| 1 | hb1~hb7 | info · cores · jobs · available · call |
+| 2 | hb8~ | `saves` 조회, `info.caps`, `cores` 의 `corename` · `savestate` |
+
+기능은 `info` 의 `caps`(쉼표로 이은 글자)로 확인한다. 옛 버전에는 칸이 없다.
+- `entry_slot` — 인텐트 `ENTRYSLOT`
+- `saves` — `saves` 조회
+- `thumb_default` — 상태저장 그림 기본 켜짐
 
 ### 읽기 — `content query`
 
 | URI | 줄 |
 |---|---|
-| `…/info` | api_version · package · version_name · abi · cores_dir · info_dir · system_dir · config_path · buildbot_url · core_count · index_age_ms |
-| `…/cores` | core · file · path · size · mtime · crc32 · abi · abi_ok · display_name · system_name · extensions · core_version · firmware_count |
+| `…/info` | api_version · caps · package · version_name · abi · cores_dir · info_dir · system_dir · config_path · buildbot_url · core_count · index_age_ms |
+| `…/cores` | core · file · path · size · mtime · crc32 · abi · abi_ok · display_name · system_name · extensions · core_version · firmware_count · corename · savestate |
 | `…/jobs` | id · core · source · state(queued/downloading/installing/done/failed/cancelled) · progress · bytes · total · error · note · crc32 |
 | `…/available` | core · file · date · crc32 · installed · local_crc32 · up_to_date (buildbot `.index-extended`) |
+| `…/saves?core=<코어>&rom=<롬 전체 경로>` | 그 게임의 롬저장 · 상태저장 폴더 — 아래 '세이브 폴더' |
+
+- `cores` 의 `corename` · `savestate` 는 info 파일 값 그대로다. `savestate` 는 `"true"` · `"false"` · 빈 값(적혀 있지 않음)이다.
+  `"false"` 면 그 코어는 상태저장을 못 한다.
 
 - `?core=snes9x` 한 코어만, `?format=json` 한 줄 `json` 칸에 JSON 배열로(쉼표가 든 값도 안전하게 읽힘), `available?refresh=1` 목록을 지금 받음.
 - `crc32` 는 buildbot `.index-extended` 와 같은 방식(풀어 놓은 .so 의 CRC32) — 같으면 최신이다.
@@ -85,6 +107,63 @@ python haebang\build.py
 adb shell content query --uri content://com.haebang.retroarch.cores/cores
 adb shell "content query --uri 'content://com.haebang.retroarch.cores/cores?format=json'"
 ```
+
+### 세이브 폴더 — `saves`
+
+retroarch.cfg 는 앱 전용 폴더에 있어 런처가 읽지 못한다. 그래서 코어 브릿지가 대신 읽고 RetroArch 와 같은 규칙으로 편다.
+
+```sh
+adb shell "content query --uri 'content://com.haebang.retroarch.cores/saves?format=json&core=snes9x&rom=/storage/…/Super Mario World (USA).zip'"
+```
+
+```json
+{"ok": true,
+ "save_dir": "/storage/emulated/0/RetroArch/saves/Snes9x",
+ "state_dir": "/storage/emulated/0/RetroArch/states/Snes9x",
+ "base": "Super Mario World (USA)",
+ "library_name": "Snes9x", "library_name_from": "info",
+ "save_dir_exists": true, "state_dir_exists": true,
+ "thumbnail": true, "auto_save": false, "auto_load": false, "state_slot": 0,
+ "save_root": "/storage/emulated/0/RetroArch/saves", "state_root": "/storage/emulated/0/RetroArch/states",
+ "save_root_config": "…", "state_root_config": "…",
+ "sort_savefiles": true, "sort_savestates": true, "sort_savefiles_by_content": false, "sort_savestates_by_content": false,
+ "savefiles_in_content_dir": false, "savestates_in_content_dir": false,
+ "config_path": "/storage/emulated/0/Android/data/com.haebang.retroarch/files/retroarch.cfg"}
+```
+
+- 파일 이름은 `<state_dir>/<base>.state` · `.state1` … · `.state.auto`, 그림은 그 뒤에 `.png`(`Mario.state1.png`), 롬저장은 `<save_dir>/<base>.srm` 이다.
+- `rom` 은 URI 값이라 `+` · `&` · `#` 은 `%2B` · `%26` · `%23` 으로 적는다(공백 · 괄호는 그대로 된다).
+- `core` · `rom` 이 없으면 폴더 값(`save_root` · `state_root`)과 정렬 설정만 준다.
+- `config=<…cfg>` 로 다른 설정 파일을 읽게 할 수 있다(런처가 `CONFIGFILE` 로 다른 파일을 넘길 때). 없으면 기본 retroarch.cfg.
+- 실패하면 `{"ok": false, "error": "…"}`.
+
+규칙(RetroArch 1.22.2 `configuration.c` · `runloop.c` 의 `runloop_path_set_basename` · `runloop_path_set_redirect` 를 옮김)
+1. 폴더 값은 `savefile_directory` · `savestate_directory` 다. `~` · `:` 로 시작하면 RetroArch 처럼 편다.
+   **`default` · 빈 값 · 없는 폴더면 `save_root` 가 빈 값**이다. 이때는 롬이 있는 폴더를 쓴다.
+   - 앱 아이콘으로 켜면 기본 폴더(`<내부>/RetroArch/saves`)가 채워진다. 그런데 프런트엔드가 `DATADIR` 없이 게임 화면을 바로 켜면 비어 있다.
+   - RG 476H 에서 확인했다. `default` 로 두고 런처처럼 켜면 `<롬 폴더>/Genesis Plus GX/…srm` 에 썼다.
+   - 앱 아이콘으로 한 번 켜고 끝내면 설정에 실제 경로가 적히므로, 보통의 기기에는 경로가 적혀 있다.
+2. `savefiles_in_content_dir` · `savestates_in_content_dir` 가 켜져 있거나 1 이 빈 값이면 → 롬이 있는 폴더.
+3. 내용별 정렬(`sort_*_by_content_enable`)이 켜져 있으면 → 롬의 바로 위 폴더 이름을 붙인다.
+   코어별 정렬(`sort_*_enable`, 기본 켜짐)이 켜져 있으면 → 그 뒤에 `library_name` 을 붙인다.
+4. `library_name` 은 코어가 실행 때 알려 주는 이름이다. 코어를 올리지 않으므로 info 파일의 `corename` 을 쓴다(`library_name_from: "info"`).
+   그 폴더가 없고, 이름을 정규화(소문자 영숫자만)하면 같은 폴더가 있으면 그 폴더를 쓴다(`"folder"`).
+5. `base` 는 롬 파일 이름에서 마지막 확장자를 뗀 것이다(`.zip` 이면 zip 이름). 압축 파일 안(`….zip#안/게임.sfc`)이면 안쪽 파일 이름이다.
+- 보지 않는 것: 코어 · 게임별 덮어쓰기 설정(`config/<코어>/…cfg`), 넷플레이 클라이언트의 `.netplay` 폴더, 폴더를 못 만들어 되돌아가는 경우.
+
+**확인(RG 476H, hb8)** — 조회 결과와 RetroArch 가 실제로 쓴 자리(로그 `[Override] Redirecting …`)가 12가지 모두 같았다.
+- 코어 2개: Genesis Plus GX · Snes9x
+- 설정 6가지: 코어별 / 내용별+코어별 / 내용별만 / 롬 폴더에 / 정렬 끔 / `default` 폴더
+
+info 의 `corename` 과 실제 `library_name`(폴더 이름)이 다른 코어도 찾았다. 모두 그 폴더로 맞춰졌다(`library_name_from: "folder"`).
+
+| 코어 | corename | 실제 폴더 |
+|---|---|---|
+| `mame2010` | `MAME 2010 (0.139)` | `MAME 2010` |
+| `mame2015` | `MAME 2015 (0.160)` | `MAME 2015` |
+| `mamearcade` | `MAME (Git)` | `MAME` |
+
+`mame2016`(`MAME 2016 (0.174)`)은 아직 폴더가 없어 corename 그대로 준다. 한 번 저장해 폴더가 생기면 그 폴더를 쓴다.
 
 ### 부르기 — `content call`
 
@@ -143,6 +222,30 @@ am start -n com.haebang.retroarch/com.retroarch.browser.retroactivity.RetroActiv
 `LIBRETRO` 의 파일 이름은 `cores` 목록의 `file` 을 쓰는 것이 가장 정확하다(앱 안 업데이터로 받은 Azahar 는 `azahar_libretro.so`).
 
 세이브 · 스테이트 · BIOS(`/storage/emulated/0/RetroArch/{saves,states,system}`)는 공식 RetroArch 와 같은 자리를 기본으로 쓴다. 설정(retroarch.cfg)은 따로다.
+
+**상태저장에서 시작 — `-e ENTRYSLOT <값>`**(hb8, 글자 추가값)
+
+| 값 | 동작 |
+|---|---|
+| `0` ~ `999` | 명령줄 `-e N`(`--entryslot`)과 같다. `<이름>.state<N>.entry` 가 있으면 그것을, 없으면 `.state<N>`(0번은 `.state`)을 불러온다. 현재 슬롯도 N 이 된다. 그 파일이 없으면 그냥 시작한다. |
+| `auto` | `.state.auto` 를 한 번 불러온다. `savestate_auto_load` 설정과 상관없고, 현재 슬롯은 그대로다. |
+| 그 밖(`abc` · `1000` · `007` 같은 앞자리 0) | 무시하고 그냥 시작한다(logcat `[ENV] Ignoring entry slot`). |
+
+- 업적 하드코어 · 넷플레이 · 리플레이 재생 중이면 RetroArch 가 원래 거절한다.
+- 그 게임이 이미 떠 있어도 `ENTRYSLOT` 이 있으면 새 작업으로 다시 띄워 그 장면에서 시작한다(아래 '다른 게임 요청').
+  `ENTRYSLOT` 이 없으면 예전처럼 하던 데서 이어진다.
+- 업스트림 동작이라 그대로 둔 것이 있다. 실행 기록(`content_runtime_log`, 기본 켜짐)에 그 게임의 마지막 슬롯(1 이상)이 있으면,
+  RetroArch 는 상태저장을 불러온 **뒤** 현재 슬롯을 그 슬롯으로 다시 맞춘다(`runloop_event_init_core` → `runtime_log_init`).
+  - `-e N` 도 같다. 불러오는 장면은 N 이 맞다.
+  - 다만 그 뒤 게임 안에서 저장하면 마지막 슬롯으로 갈 수 있다.
+- 길: 인텐트 → `frontend_unix_get_env`(`platform_unix.c`)가 값을 확인해 `rarch_main_wrap.entry_slot` 에 담는다.
+  → `content_load_init_wrap`(`task_content.c`)이 `-e <값>` 으로 바꾼다. → `retroarch.c` 가 숫자는 `entry_state_slot` 에 넣고,
+  `auto` 는 HB 표시(`runloop_st->hb_entry_auto`)로 받는다. → `event_init_content`(`runloop.c`)가 불러온다.
+
+```sh
+am start -n com.haebang.retroarch/com.retroarch.browser.retroactivity.RetroActivityFuture \
+  -e ROM <롬> -e LIBRETRO <코어> -e CONFIGFILE <설정> -e ENTRYSLOT 2
+```
 
 ## 패드 버튼 동시 입력 (입력 스레드)
 
@@ -259,6 +362,52 @@ Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0 in tid … (Thre
 **고침**(hb7, 업스트림 #18587 과 같음) — 다른 게임이면 같은 요청을 새 작업(`NEW_TASK | CLEAR_TASK`)으로 다시 띄우고 끝낸다.
 해방런처는 끝나 돌아오면 한 번 더 보내는데(1.22.x), 그 길은 쓰이지 않게 될 뿐 그대로 둬도 된다.
 
+**hb8** — 같은 게임이라도 새 요청에 올바른 `ENTRYSLOT` 이 있으면 같은 길로 다시 띄운다. 해방런처는 QUITFOCUS 를 넘기지 않아
+RetroArch 가 그 게임으로 뒤에 떠 있는 일이 흔하다. 다시 띄우지 않으면 '이 상태로 시작'이 그냥 이어 하기가 된다.
+
+## 홈 · 슬립으로 나갈 때 롬저장 쓰기
+
+다시 띄우는 길은 `System.exit(0)` 로 끝나 RetroArch 의 마지막 쓰기를 건너뛴다. 롬저장(.srm)은 자동 저장 스레드가
+`autosave_interval`(안드로이드 기본 10초)마다만 쓰므로, 그 몫을 잃을 수 있었다.
+
+**고침**(hb8, `android_input.c`)
+- 게임 화면이 뒤로 갈 때(홈 · 슬립 · 다른 앱) 안드로이드가 부르는 `onSaveInstanceState` → `APP_CMD_SAVE_STATE` 에서, 게임이 올라와 있으면
+  `CMD_EVENT_SAVE_FILES` 로 롬저장을 바로 쓴다. 업스트림 네트워크 명령 `SAVE_FILES` 와 같은 일이다.
+  - 메인 스레드에서 쓴다.
+  - 이 명령은 안드로이드 쪽이 답을 기다리는 명령이라, 다 쓴 뒤에 뒤로 간다.
+- 그래서 런처가 세이브 창을 열 때 .srm 은 최신이다. 그 뒤 `ENTRYSLOT` · 다른 게임으로 다시 띄워도 잃을 것이 없다.
+- 게임이 앞에 떠 있는 채로 요청이 오면(adb 등) 나간 적이 없으니 최대 `autosave_interval` 몫은 여전히 쓰이지 않을 수 있다.
+
+## 상태저장 그림
+
+해방런처 세이브 창이 상태저장을 그림으로 보인다. RetroArch 는 상태저장마다 화면을 `<상태저장 파일>.png` 로 둘 수 있다
+(`savestate_thumbnail_enable`, `tasks/task_save.c`). 이름은 `Mario.state.png` · `Mario.state1.png` · `Mario.state.auto.png` 이고, 크기는 코어 해상도 그대로다.
+공식 안드로이드판은 이 값이 기본으로 꺼져 있다(`config.def.h` 는 x86_64 만 켬).
+
+**고침**(hb8)
+- `config.def.h` — 안드로이드도 기본 켜짐(새로 깔면 그대로 켜진다).
+- `SavestateThumbDefault` — 이미 깐 기기의 retroarch.cfg 에는 `"false"` 가 적혀 있어 기본값만으로는 안 바뀐다.
+  게임 화면이 켜질 때(`RetroActivityFuture.onCreate`, `BundleAssetsCheck` 다음, RetroArch 가 설정을 읽기 전) 다음처럼 한다.
+  - 그 설정 파일(`CONFIGFILE`, 없으면 기본 자리)에 대해 **한 번만** 그 줄을 `"true"` 로 고친다.
+  - 했다는 표시는 SharedPreferences(`haebang` · `hb_thumb_default_v1:<경로>`)에 남는다. 그래서 그 뒤 사용자가 메뉴에서 끄면 그대로 둔다.
+  - 그 한 줄만 바꾸고 다른 줄(순서 · 빈 값)은 그대로 둔다.
+- 그림을 끈 채 같은 슬롯에 다시 저장하면 `.png` 는 옛것으로 남는다. 그림 파일이 상태저장보다 오래됐으면 옛 그림이다.
+
+**확인(RG 476H · Genesis Plus GX)**
+- hb7→hb8 덮어 설치: 기기 cfg 3,365개 가운데 `savestate_thumbnail_enable` false→true 와 자료 풀기 기록 3줄만 바뀌었다. 사본 cfg 에서 끈 뒤 다시 켜도 false 로 남았다.
+- 0 · 1 · 2번 + 자동(끝낼 때) 모두 `.png` 가 생겼다.
+  - 저장 순간 화면 = 그림 = `ENTRYSLOT` 으로 불러온 직후 장면이었다.
+  - 1번 그림은 그 순간 게임이 화면 전환 중이라 검은색이었다.
+- 저장 한 번에 화면이 멈추는 시간: 저장할 때 앞뒤 약 1.2초의 프레임 표시 간격(SurfaceFlinger)에서 가장 긴 것을 쟀다.
+
+| | 6번 중 가장 긴 간격 |
+|---|---|
+| 저장 안 함 | 17.0ms |
+| 그림 켬 | 17.0ms |
+| 그림 끔 | 17.1ms |
+
+60Hz 한 칸(16.7ms)을 넘는 멈춤은 없었다. 큰 코어(PS2 · 3DS 등)는 상태저장 자체가 더 오래 걸리지만, 그림이 더하는 몫은 화면 한 장을 읽는 일이다.
+
 ## 알림 허용 창 (안드로이드 13+)
 
 코어를 받을 때 진행 알림을 띄우려고 알림 채널을 만든다(`CoreInstallService`).
@@ -285,7 +434,7 @@ Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0 in tid … (Thre
 ```sh
 git remote add upstream https://github.com/libretro/RetroArch.git   # 한 번만
 git fetch upstream tag v1.23.0
-git rebase --onto v1.23.0 v1.22.2 haebang   # 고친 업스트림 파일은 build.gradle · android_input.c · video_thread_wrapper.c · MainMenuActivity.java · RetroActivityFuture.java(.github/README.md 는 새 파일)
+git rebase --onto v1.23.0 v1.22.2 haebang   # 고친 업스트림 파일은 맨 위 '고친 업스트림 파일' 열둘(.github/README.md 는 새 파일)
 git push --force-with-lease origin haebang
 ```
 
