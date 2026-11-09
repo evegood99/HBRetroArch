@@ -151,6 +151,7 @@ RetroArch 가 꺼지는 문제입니다(안드로이드 13, Vulkan · GL 모두)
   자동 상태저장(`.state.auto`)과 그 그림을 씁니다. 다음에 `ENTRYSLOT auto` 로 그 자리에서 이어 합니다.
   - 파일은 임시 파일에 다 쓴 뒤 바꿔 넣고, 그림을 못 만들면 옛 그림을 지웁니다.
   - N64 · PS1 처럼 GPU 로 그리는 코어는 화면이 사라지기 전(포커스를 잃는 순간)에 그림을 떠 둡니다.
+  - 슬립으로 나갈 때는 저장이 끝날 때까지 기기가 잠들지 않게 붙잡습니다(그래서 '절전 모드 해제' 권한이 더해졌습니다).
 
 ## 소스에서 빌드
 
@@ -167,7 +168,7 @@ python haebang\build.py        # → haebang\out\HBRetroArch-1.22.2-<hb 번호>.
 - `input/drivers/android_input.c` — 동시 입력, 홈 · 슬립으로 나갈 때 롬저장 · 자동 상태저장, 안드로이드 명령을 코어 프레임 밖에서 처리
 - `gfx/video_thread_wrapper.c` — 스레드된 비디오에서 슬립 · 홈에서 돌아올 때 꺼지던 것
 - `MainMenuActivity.java` — 안드로이드 13+ 에서 아이콘으로 켤 때 알림 허용 창이 덮여 매번 다시 뜨던 것
-- `RetroActivityFuture.java` — 120Hz 화면의 주기적 끊김, 프론트엔드로 바로 켤 때도 기본 자료(글꼴 · 아이콘) 풀기, 상태저장 그림 켜기, 다른 게임을 고르면 한 번에 다시 띄우기(업스트림 #18587) · `ENTRYSLOT` 이면 같은 게임도 다시 띄우기
+- `RetroActivityFuture.java` — 120Hz 화면의 주기적 끊김, 프론트엔드로 바로 켤 때도 기본 자료(글꼴 · 아이콘) 풀기, 상태저장 그림 켜기, 다른 게임을 고르면 한 번에 다시 띄우기(업스트림 #18587) · `ENTRYSLOT` 이면 같은 게임도 다시 띄우기 · 나갈 때 저장 동안 CPU 깨워 두기
 - `config.def.h` — 안드로이드도 상태저장 그림 기본 켜짐
 - `frontend/drivers/platform_unix.c` · `retroarch_types.h` · `tasks/task_content.c` · `retroarch.c` · `runloop.h` · `runloop.c` — 실행 값 `ENTRYSLOT` 을 명령줄 `-e` 로 넘기기, `-e auto`
 - `frontend/drivers/platform_unix.h` · `command.c` · `command.h` · `content.h` · `tasks/task_save.c` · `tasks/task_screenshot.c` · `tasks/tasks_internal.h` — 나갈 때 자동 상태저장
