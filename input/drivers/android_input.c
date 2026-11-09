@@ -18,6 +18,7 @@
 
 #include <unistd.h>
 #include <dlfcn.h>
+#include <poll.h>
 #include <string.h>
 #include <time.h>
 
@@ -441,6 +442,70 @@ bool android_input_can_be_keyboard(void *data, int port)
     return android_input_can_be_keyboard_jni(device->id);
 }
 
+/* HB: the game is being left - the activity goes to the background (home,
+ * sleep) and may be killed from there, or the Java side is about to
+ * relaunch for another game or a save state slot. Write the save RAM now
+ * instead of leaving up to autosave_interval seconds unsaved, and the
+ * .state.auto file when the frontend asked for it (AUTOSAVESTATE = "1").
+ * Both are blocking, so they are on disk before the activity moves on.
+ * @background: the activity is no longer in front (its window may be gone). */
+static void hb_leave_save(bool background)
+{
+   if (!(runloop_state_get_ptr()->current_core.flags & RETRO_CORE_FLAG_GAME_LOADED))
+      return;
+   command_event(CMD_EVENT_SAVE_FILES, NULL);
+   if (android_hb_autosave_leave())
+      command_event_hb_leave_save_state(background);
+}
+
+/* HB: true while the core runs a frame (runloop_iterate calls
+ * android_hb_core_run_begin / _end around it). Cores poll input from inside
+ * retro_run, and the activity commands used to be handled right there.
+ * A save state, a GPU readback or a JNI call must not run inside retro_run
+ * (Mupen64Plus runs it on its own libco stack - JNI throws
+ * StackOverflowError), so inside a frame the poll leaves the commands in
+ * the pipe and they are handled, in order, as soon as the frame ends. */
+static bool hb_in_core_run = false;
+
+static void android_input_poll_main_cmd(void);
+
+void android_hb_core_run_begin(void)
+{
+   hb_in_core_run = true;
+}
+
+void android_hb_core_run_end(void)
+{
+   struct pollfd fds;
+   struct android_app *android_app = (struct android_app*)g_android;
+
+   hb_in_core_run = false;
+   if (!android_app)
+      return;
+   fds.fd      = android_app->msgread;
+   fds.events  = POLLIN;
+   fds.revents = 0;
+   while (poll(&fds, 1, 0) > 0 && (fds.revents & POLLIN))
+   {
+      android_input_poll_main_cmd();
+      fds.revents = 0;
+
+      /* the same checks as after a command in android_input_poll */
+      if (android_app->destroyRequested != 0)
+      {
+         retroarch_ctl(RARCH_CTL_SET_SHUTDOWN, NULL);
+         return;
+      }
+      if (android_app->reinitRequested != 0)
+      {
+         if (runloop_get_flags() & RUNLOOP_FLAG_PAUSED)
+            command_event(CMD_EVENT_REINIT, NULL);
+         android_app_write_cmd(android_app, APP_CMD_REINIT_DONE);
+         return;
+      }
+   }
+}
+
 static void android_input_poll_main_cmd(void)
 {
    int8_t cmd;
@@ -500,14 +565,20 @@ static void android_input_poll_main_cmd(void)
          break;
 
       case APP_CMD_SAVE_STATE:
-         /* HB: the activity is going to the background (home, sleep) and
-          * may be killed from there - a frontend asking for another game or
-          * a save state slot makes it exit at once. Write the save RAM now
-          * instead of leaving up to autosave_interval seconds unsaved. */
-         if (runloop_state_get_ptr()->current_core.flags & RETRO_CORE_FLAG_GAME_LOADED)
-            command_event(CMD_EVENT_SAVE_FILES, NULL);
+         hb_leave_save(true);   /* HB: home, sleep (after onStop) */
          slock_lock(android_app->mutex);
          android_app->stateSaved = 1;
+         scond_broadcast(android_app->cond);
+         slock_unlock(android_app->mutex);
+         break;
+
+      case APP_CMD_HB_LEAVE_SAVE:
+         /* HB: before the Java side relaunches - in front, or already
+          * left (then usually skipped: saved when it was left) */
+         hb_leave_save(  !android_app->window
+                      || android_app->activityState == APP_CMD_STOP);
+         slock_lock(android_app->mutex);
+         android_app->hbLeaveSaved = 1;
          scond_broadcast(android_app->cond);
          slock_unlock(android_app->mutex);
          break;
@@ -516,6 +587,11 @@ static void android_input_poll_main_cmd(void)
       case APP_CMD_START:
       case APP_CMD_PAUSE:
       case APP_CMD_STOP:
+         /* HB: onPause comes first when the game is left (home, sleep),
+          * while the window is still there; focus loss can come later than
+          * onSaveInstanceState, sleep may not bring it at all. */
+         if (cmd == APP_CMD_PAUSE && android_hb_autosave_leave())
+            command_event_hb_leave_precapture();
          slock_lock(android_app->mutex);
          android_app->activityState = cmd;
          scond_broadcast(android_app->cond);
@@ -549,6 +625,8 @@ static void android_input_poll_main_cmd(void)
             runloop_st->flags &= ~(RUNLOOP_FLAG_PAUSED
                                  | RUNLOOP_FLAG_IDLE);
             video_driver_unset_stub_frame();
+            /* HB: the game was not left - the kept picture is not needed */
+            command_event_hb_leave_precapture_drop();
 
             if (enable_accelerometer)
                input_set_sensor_state(0,
@@ -574,6 +652,15 @@ static void android_input_poll_main_cmd(void)
             bool disable_gyroscope      = (android_app->sensor_state_mask &
                   (UINT64_C(1) << RETRO_SENSOR_GYROSCOPE_ENABLE)) &&
                         android_app->gyroscopeSensor;
+
+            /* HB: before pausing, while the window is still there - keep
+             * a screen picture for a leave save (hardware-rendered cores).
+             * Not after onPause: that one kept a picture already, and the
+             * window may be gone by now. */
+            if (     android_app->window
+                  && android_app->activityState == APP_CMD_RESUME
+                  && android_hb_autosave_leave())
+               command_event_hb_leave_precapture();
 
             runloop_st->flags |=  (RUNLOOP_FLAG_PAUSED
                                  | RUNLOOP_FLAG_IDLE);
@@ -2029,6 +2116,7 @@ static void android_input_poll_user(android_input_t *android)
 static void android_input_poll(void *data)
 {
    int ident;
+   bool hb_cmd_waits               = false;
    struct android_app *android_app = (struct android_app*)g_android;
    android_input_t *android        = (android_input_t*)data;
    settings_t            *settings = config_get_ptr();
@@ -2053,9 +2141,19 @@ static void android_input_poll(void *data)
             android_input_poll_user(android);
             break;
          case LOOPER_ID_MAIN:
+            /* HB: inside retro_run - left for android_hb_core_run_end.
+             * Stop here: the pipe stays readable and would come back at once;
+             * the remaining input events are read on the next poll. */
+            if (hb_in_core_run)
+            {
+               hb_cmd_waits = true;
+               break;
+            }
             android_input_poll_main_cmd();
             break;
       }
+      if (hb_cmd_waits)
+         break;
 
       if (android_app->destroyRequested != 0)
       {

@@ -364,6 +364,12 @@ bool command_event_resize_windowed_scale(settings_t *settings,
 
 size_t command_event_save_auto_state(void);
 
+/* HB: .state.auto when the game is left (AUTOSAVESTATE=1) */
+bool command_event_hb_leave_save_state(bool background);
+/* HB: keep / drop a screen picture for it while the window is there */
+void command_event_hb_leave_precapture(void);
+void command_event_hb_leave_precapture_drop(void);
+
 /**
  * event_set_volume:
  * @gain      : amount of gain to be applied to current volume level.

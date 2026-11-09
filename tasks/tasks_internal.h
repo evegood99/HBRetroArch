@@ -231,6 +231,11 @@ bool take_screenshot(
       const char *path, bool silence,
       bool has_valid_framebuffer, bool fullpath, bool use_thread);
 
+/* HB: screen picture kept in memory for the leave save (task_screenshot.c) */
+bool hb_screenshot_precapture(void);
+bool hb_screenshot_write_precaptured(const char *path);
+void hb_screenshot_precapture_free(void);
+
 bool event_load_save_files(bool is_sram_load_disabled);
 
 bool event_save_files(bool sram_used, bool compress_files,

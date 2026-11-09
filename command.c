@@ -28,6 +28,7 @@
 #include <file/file_path.h>
 #include <streams/stdin_stream.h>
 #include <streams/file_stream.h>
+#include <features/features_cpu.h>
 #include <string/stdstring.h>
 
 #ifdef HAVE_CONFIG_H
@@ -1388,6 +1389,119 @@ size_t command_event_save_auto_state(void)
 			   msg_hash_to_str(MSG_AUTO_SAVE_STATE_TO),
 			   savestate_name_auto, "failed");
    return _len;
+}
+
+/* HB: core runtime when the screen picture for the leave save was kept
+ * (hardware-rendered cores, onPause / focus lost); -1 when there is none. */
+static retro_time_t hb_pre_runtime = -1;
+
+/* HB: the game may be left (onPause, focus lost) - keep a picture of the
+ * screen while the window is still there, for hardware-rendered cores
+ * (software cores keep their last frame in memory anyway). */
+void command_event_hb_leave_precapture(void)
+{
+   retro_time_t start;
+   settings_t *settings        = config_get_ptr();
+   runloop_state_t *runloop_st = runloop_state_get_ptr();
+
+   command_event_hb_leave_precapture_drop();
+   if (     !settings->bools.savestate_thumbnail_enable
+         || !video_driver_is_hw_context()
+         || !(runloop_st->current_core.flags & RETRO_CORE_FLAG_GAME_LOADED)
+         || !core_info_current_supports_savestate())
+      return;
+   start = cpu_features_get_time_usec();
+   if (hb_screenshot_precapture())
+      hb_pre_runtime = runloop_st->core_runtime_usec;
+   RARCH_LOG("[State] HB kept a screen picture: %s in %d ms.\n",
+         hb_pre_runtime >= 0 ? "yes" : "no",
+         (int)((cpu_features_get_time_usec() - start) / 1000));
+}
+
+void command_event_hb_leave_precapture_drop(void)
+{
+   hb_pre_runtime = -1;
+   hb_screenshot_precapture_free();
+}
+
+/* HB: AUTOSAVESTATE=1 (HB Launcher) - write the .state.auto file when the
+ * game is left (home, sleep, relaunch, quit), whatever savestate_auto_save
+ * says. Skipped when the core ran less than a second since the last one
+ * for the same content, and where RetroArch refuses states (achievements
+ * hardcore, netplay, replays). The current slot is not touched.
+ * @background: the activity is no longer in front (onSaveInstanceState). */
+bool command_event_hb_leave_save_state(bool background)
+{
+   static char last_path[PATH_MAX_LENGTH];
+   static retro_time_t last_runtime = -1;
+   char path[PATH_MAX_LENGTH];
+   retro_time_t start;
+   bool ret;
+   int thumb;
+   runloop_state_t *runloop_st = runloop_state_get_ptr();
+   retro_time_t runtime        = runloop_st->core_runtime_usec;
+#ifdef HAVE_BSV_MOVIE
+   input_driver_state_t *input_st = input_state_get_ptr();
+   if (input_st->bsv_movie_state.flags & (BSV_FLAG_MOVIE_START_PLAYBACK
+            | BSV_FLAG_MOVIE_PLAYBACK | BSV_FLAG_MOVIE_START_RECORDING
+            | BSV_FLAG_MOVIE_RECORDING))
+      return false;
+#endif
+#ifdef HAVE_CHEEVOS
+   if (rcheevos_hardcore_active())
+      return false;
+#endif
+#ifdef HAVE_NETWORKING
+   if (netplay_driver_ctl(RARCH_NETPLAY_CTL_IS_ENABLED, NULL))
+      return false;
+#endif
+   if (!(runloop_st->current_core.flags & RETRO_CORE_FLAG_GAME_LOADED))
+      return false;
+   if (string_is_empty(path_basename(path_get(RARCH_PATH_BASENAME))))
+      return false;
+
+   strlcpy(path, runloop_st->name.savestate, sizeof(path));
+   strlcat(path, ".auto", sizeof(path));
+   if (     last_runtime >= 0
+         && runtime - last_runtime < 1000000
+         && string_is_equal(path, last_path))
+   {
+      RARCH_LOG("[State] HB leave save skipped (ran %d ms since the last one).\n",
+            (int)((runtime - last_runtime) / 1000));
+      command_event_hb_leave_precapture_drop();
+      return true;
+   }
+
+   /* Thumbnail: software cores read their last frame from memory. A
+    * hardware-rendered core in the background (the surface is going or
+    * gone) reads nothing or black from the GPU, or waits seconds for it -
+    * it takes the picture kept at onPause / focus loss when the core ran
+    * less than a second of game time since, or makes none. */
+   if (video_driver_is_hw_context())
+   {
+      /* In front (relaunch, quit): keep a picture now, the same way - the
+       * kept one is shrunk, a screen-sized PNG takes seconds to write. */
+      if (!background && !(runloop_get_flags() & RUNLOOP_FLAG_IDLE))
+         command_event_hb_leave_precapture();
+      thumb = (hb_pre_runtime >= 0 && runtime - hb_pre_runtime < 1000000)
+            ? HB_THUMB_KEPT : HB_THUMB_NONE;
+   }
+   else
+      thumb = HB_THUMB_SCREEN;
+   start = cpu_features_get_time_usec();
+   ret   = content_hb_leave_save_state(path, thumb);
+   RARCH_LOG("[State] HB leave save to \"%s\" %s in %d ms (thumbnail: %s).\n",
+         path, ret ? "succeeded" : "failed",
+         (int)((cpu_features_get_time_usec() - start) / 1000),
+         thumb == HB_THUMB_KEPT ? "kept before leaving"
+         : thumb == HB_THUMB_NONE ? "none" : "screen");
+   command_event_hb_leave_precapture_drop();
+   if (ret)
+   {
+      strlcpy(last_path, path, sizeof(last_path));
+      last_runtime = runtime;
+   }
+   return ret;
 }
 
 #ifdef HAVE_CHEATS

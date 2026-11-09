@@ -135,6 +135,7 @@ struct android_app
    int destroyed;
    AInputQueue* pendingInputQueue;
    ANativeWindow* pendingWindow;
+   int hbLeaveSaved; /* HB: APP_CMD_HB_LEAVE_SAVE done */
 
    /*  Below are "private" implementation of RA code. */
    bool unfocused;
@@ -303,7 +304,11 @@ enum
     */
    APP_CMD_DESTROY,
 
-   APP_CMD_REINIT_DONE
+   APP_CMD_REINIT_DONE,
+
+   /* HB: from the Java side before it relaunches for another game or
+    * a save state slot - save as when leaving, then hbLeaveSaved = 1. */
+   APP_CMD_HB_LEAVE_SAVE
 };
 
 #define JNI_EXCEPTION(env) \
@@ -372,6 +377,10 @@ enum
 extern JNIEnv *jni_thread_getenv(void);
 
 void android_app_write_cmd(struct android_app *android_app, int8_t cmd);
+
+/* HB: the current intent asks for a .state.auto when the game is left
+ * (AUTOSAVESTATE = "1"). Main thread only. */
+bool android_hb_autosave_leave(void);
 
 extern struct android_app *g_android;
 

@@ -1390,6 +1390,93 @@ bool content_auto_save_state(const char *path)
 }
 
 /**
+ * content_hb_leave_save_state:
+ * @path      : path of saved state that shall be written to.
+ * HB: like content_auto_save_state (blocking), but safe to be stopped right
+ * after - it runs when the game is left (home, sleep, relaunch) and the
+ * process may then be frozen or killed. The state is written to
+ * "<path>.hbtmp" and renamed over @path only when complete; the thumbnail
+ * goes the same way. When no new thumbnail can be made, the old one is
+ * removed - it would show another scene. @thumb: where the thumbnail comes
+ * from - HB_THUMB_SCREEN reads the screen now, HB_THUMB_KEPT takes the
+ * picture kept when focus was lost (hardware-rendered cores, see
+ * hb_screenshot_precapture), HB_THUMB_NONE makes none.
+ *
+ * Returns: true if the state was written, false otherwise.
+ **/
+bool content_hb_leave_save_state(const char *path, int thumb)
+{
+   size_t _len;
+   bool written;
+   char tmp[PATH_MAX_LENGTH];
+   char png[PATH_MAX_LENGTH];
+   char tmp_png[PATH_MAX_LENGTH];
+   settings_t *settings = config_get_ptr();
+   void *serial_data    = NULL;
+   intfstream_t *file   = NULL;
+
+   if (!core_info_current_supports_savestate())
+      return false;
+   if ((_len = core_serialize_size()) == 0)
+      return false;
+   if (!(serial_data = content_get_serialized_data(&_len)))
+      return false;
+
+   strlcpy(tmp, path, sizeof(tmp));
+   strlcat(tmp, ".hbtmp", sizeof(tmp));
+   strlcpy(png, path, sizeof(png));
+   strlcat(png, ".png", sizeof(png));
+   strlcpy(tmp_png, tmp, sizeof(tmp_png));
+   strlcat(tmp_png, ".png", sizeof(tmp_png));
+
+#if defined(HAVE_ZLIB)
+   if (settings->bools.savestate_file_compression)
+      file = intfstream_open_rzip_file(tmp, RETRO_VFS_FILE_ACCESS_WRITE);
+   else
+#endif
+      file = intfstream_open_file(tmp, RETRO_VFS_FILE_ACCESS_WRITE,
+                                  RETRO_VFS_FILE_ACCESS_HINT_NONE);
+   if (!file)
+   {
+      free(serial_data);
+      return false;
+   }
+   written = (_len == (size_t)intfstream_write(file, serial_data, _len));
+   intfstream_close(file);
+   free(file);
+   free(serial_data);
+
+   if (!written || filestream_rename(tmp, path) != 0)
+   {
+      filestream_delete(tmp);
+      return false;
+   }
+
+#ifdef HAVE_SCREENSHOTS
+   if (settings->bools.savestate_thumbnail_enable && thumb != HB_THUMB_NONE)
+   {
+      video_driver_state_t *video_st = video_state_get_ptr();
+      bool validfb = video_st->frame_cache_data &&
+                     video_st->frame_cache_data == RETRO_HW_FRAME_BUFFER_VALID;
+      bool shot    = (thumb == HB_THUMB_KEPT)
+            ? hb_screenshot_write_precaptured(tmp_png)
+            : take_screenshot(settings->paths.directory_screenshot,
+                  tmp, true, validfb, false, false);
+
+      if (     shot
+            && path_is_valid(tmp_png)
+            && filestream_rename(tmp_png, png) == 0)
+         return true;
+      filestream_delete(tmp_png);
+      RARCH_WARN("[State] HB: no thumbnail for \"%s\".\n", path);
+   }
+#endif
+   if (path_is_valid(png))
+      filestream_delete(png);
+   return true;
+}
+
+/**
  * content_save_state:
  * @path      : path of saved state that shall be written to.
  * @save_to_disk: If false, saves the state onto undo_load_buf.

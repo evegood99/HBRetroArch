@@ -57,6 +57,10 @@ bool content_save_state(const char *path, bool save_to_disk);
 /* Save an automatic savestate to disk. */
 bool content_auto_save_state(const char *path);
 
+/* HB: the same, written through a temporary file (leaving the game) */
+enum { HB_THUMB_NONE = 0, HB_THUMB_SCREEN, HB_THUMB_KEPT };
+bool content_hb_leave_save_state(const char *path, int thumb);
+
 /* Check a ram state write to disk. */
 bool content_ram_state_pending(void);
 

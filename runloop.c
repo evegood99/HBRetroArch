@@ -97,6 +97,9 @@
 
 #if defined(ANDROID)
 #include "play_feature_delivery/play_feature_delivery.h"
+/* HB: input/drivers/android_input.c */
+void android_hb_core_run_begin(void);
+void android_hb_core_run_end(void);
 #endif
 
 #ifdef HAVE_PRESENCE
@@ -7385,6 +7388,10 @@ int runloop_iterate(void)
    /* Measure the time between core_run() and video_driver_frame() */
    runloop_st->core_run_time = cpu_features_get_time_usec();
 
+#ifdef ANDROID
+   /* HB: activity commands wait until the frame ends (android_input.c) */
+   android_hb_core_run_begin();
+#endif
    {
 #ifdef HAVE_RUNAHEAD
       bool run_ahead_enabled            = settings->bools.run_ahead_enabled;
@@ -7416,6 +7423,9 @@ int runloop_iterate(void)
     * core_run() or run_ahead() */
    runloop_st->core_runtime_usec += runloop_core_runtime_tick(
          runloop_st, slowmotion_ratio, current_time);
+#ifdef ANDROID
+   android_hb_core_run_end();
+#endif
 
 #ifdef HAVE_CHEEVOS
    if (cheevos_enable)

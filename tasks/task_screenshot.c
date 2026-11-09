@@ -646,3 +646,105 @@ bool take_screenshot(
 
    return ret;
 }
+
+/* HB: a picture of the screen taken while the window is still there (when
+ * focus is lost), for the leave save of a hardware-rendered core. By the
+ * time the activity saves (onSaveInstanceState) the surface is gone, and
+ * the GPU readback has nothing new to read - Vulkan may even hand back the
+ * picture of an older readback. Kept in memory, bottom-up BGR24 as
+ * read_viewport gives it. */
+static uint8_t *hb_pre_buffer = NULL;
+static unsigned hb_pre_width  = 0;
+static unsigned hb_pre_height = 0;
+
+void hb_screenshot_precapture_free(void)
+{
+   free(hb_pre_buffer);
+   hb_pre_buffer = NULL;
+}
+
+bool hb_screenshot_precapture(void)
+{
+   struct video_viewport vp;
+   uint8_t *buffer                = NULL;
+   video_driver_state_t *video_st = video_state_get_ptr();
+
+   hb_screenshot_precapture_free();
+   if (     !video_st->current_video
+         || !video_st->current_video->read_viewport
+         || !video_st->current_video->viewport_info)
+      return false;
+
+   memset(&vp, 0, sizeof(vp));
+   video_driver_get_viewport_info(&vp);
+   if (!vp.width || !vp.height)
+      return false;
+   if (!(buffer = (uint8_t*)malloc(vp.width * vp.height * 3)))
+      return false;
+
+   /* Avoid taking screenshot of GUI overlays. */
+   if (video_st->poke && video_st->poke->set_texture_enable)
+      video_st->poke->set_texture_enable(video_st->data, false, false);
+   if (!video_st->current_video->read_viewport(video_st->data, buffer,
+            runloop_get_flags() & RUNLOOP_FLAG_IDLE))
+   {
+      free(buffer);
+      return false;
+   }
+
+   hb_pre_buffer = buffer;
+   hb_pre_width  = vp.width;
+   hb_pre_height = vp.height;
+   return true;
+}
+
+/* Writes the kept picture to @path as PNG (top-down) and frees it. The
+ * screen-sized picture is shrunk by a whole factor to about 480 pixels
+ * wide (box average): a 1280x960 PNG took more than 3 seconds to write on
+ * an RG 476H, while the activity waits; software cores give pictures of
+ * their own size (320x224 and the like) anyway. */
+bool hb_screenshot_write_precaptured(const char *path)
+{
+   bool ret = false;
+#if defined(HAVE_RPNG)
+   unsigned x, y, i, j;
+   unsigned f        = hb_pre_width > 480 ? (hb_pre_width + 479) / 480 : 1;
+   unsigned w        = hb_pre_width  / f;
+   unsigned h        = hb_pre_height / f;
+   size_t in_pitch   = (size_t)hb_pre_width * 3;
+   size_t out_pitch  = (size_t)w * 3;
+   uint8_t *out      = NULL;
+
+   if (hb_pre_buffer && w && h && (out = (uint8_t*)malloc(out_pitch * h)))
+   {
+      for (y = 0; y < h; y++)
+      {
+         uint8_t *dst = out + (size_t)y * out_pitch;
+         for (x = 0; x < w; x++)
+         {
+            unsigned sum[3] = { 0, 0, 0 };
+            for (j = 0; j < f; j++)
+            {
+               /* bottom-up rows: picture row r is buffer row height-1-r */
+               const uint8_t *src = hb_pre_buffer
+                  + (size_t)(hb_pre_height - 1 - (y * f + j)) * in_pitch
+                  + (size_t)x * f * 3;
+               for (i = 0; i < f; i++, src += 3)
+               {
+                  sum[0] += src[0];
+                  sum[1] += src[1];
+                  sum[2] += src[2];
+               }
+            }
+            dst[x * 3 + 0] = (uint8_t)(sum[0] / (f * f));
+            dst[x * 3 + 1] = (uint8_t)(sum[1] / (f * f));
+            dst[x * 3 + 2] = (uint8_t)(sum[2] / (f * f));
+         }
+      }
+      ret = rpng_save_image_bgr24(path, out, w, h, (unsigned)out_pitch);
+      free(out);
+   }
+#endif
+   hb_screenshot_precapture_free();
+   return ret;
+}

@@ -621,6 +621,69 @@ static bool hb_entry_slot_valid(const char *s)
    return true;
 }
 
+/* HB: AUTOSAVESTATE = "1" on the current intent. getIntent follows
+ * setIntent, so a same-game request that only resumes counts too.
+ * The main thread stays attached, so the local refs are deleted here. */
+bool android_hb_autosave_leave(void)
+{
+   bool on                         = false;
+   jobject intent                  = NULL;
+   jstring key                     = NULL;
+   jstring jstr                    = NULL;
+   struct android_app *android_app = g_android;
+   JNIEnv *env                     = jni_thread_getenv();
+
+   if (     !env || !android_app
+         || !android_app->getIntent || !android_app->getStringExtra)
+      return false;
+
+   CALL_OBJ_METHOD(env, intent, android_app->activity->clazz,
+         android_app->getIntent);
+   if (!intent)
+      return false;
+   key = (*env)->NewStringUTF(env, "AUTOSAVESTATE");
+   CALL_OBJ_METHOD_PARAM(env, jstr, intent, android_app->getStringExtra, key);
+   if (jstr)
+   {
+      const char *v = (*env)->GetStringUTFChars(env, jstr, 0);
+      on            = v && string_is_equal(v, "1");
+      (*env)->ReleaseStringUTFChars(env, jstr, v);
+      (*env)->DeleteLocalRef(env, jstr);
+   }
+   (*env)->DeleteLocalRef(env, key);
+   (*env)->DeleteLocalRef(env, intent);
+   return on;
+}
+
+/* HB: RetroActivityFuture.hbNativeLeaveSave() - the Java side calls it
+ * (UI thread) before it relaunches for another game or a save state slot.
+ * The main thread saves as when leaving (APP_CMD_HB_LEAVE_SAVE); wait for
+ * it, at most 5 seconds. */
+static void JNICALL hb_native_leave_save(JNIEnv *env, jobject thiz)
+{
+   retro_time_t deadline;
+   struct android_app *android_app = g_android;
+
+   if (!android_app)
+      return;
+
+   deadline = cpu_features_get_time_usec() + 5000000;
+   slock_lock(android_app->mutex);
+   android_app->hbLeaveSaved = 0;
+   android_app_write_cmd(android_app, APP_CMD_HB_LEAVE_SAVE);
+   while (!android_app->hbLeaveSaved)
+   {
+      retro_time_t left = deadline - cpu_features_get_time_usec();
+      if (left <= 0 || !scond_wait_timeout(android_app->cond,
+               android_app->mutex, left))
+         break;
+   }
+   if (!android_app->hbLeaveSaved)
+      __android_log_print(ANDROID_LOG_WARN,
+         "RetroArch", "[HB] Leave save did not finish in time.\n");
+   slock_unlock(android_app->mutex);
+}
+
 static void frontend_android_shutdown(bool unused)
 {
    (void)unused;
@@ -2200,6 +2263,17 @@ static void frontend_unix_init(void *data)
          "getIntent", "()Landroid/content/Intent;");
    GET_METHOD_ID(env, android_app->onRetroArchExit, class,
          "onRetroArchExit", "()V");
+   {
+      /* HB: Java -> native "save as when leaving" (RetroActivityFuture) */
+      static const JNINativeMethod hb_methods[] = {
+         { "hbNativeLeaveSave", "()V", (void*)hb_native_leave_save } };
+      if ((*env)->RegisterNatives(env, class, hb_methods, 1) != JNI_OK)
+      {
+         JNI_EXCEPTION(env);
+         __android_log_print(ANDROID_LOG_WARN,
+            "RetroArch", "[HB] Could not register hbNativeLeaveSave.\n");
+      }
+   }
    GET_METHOD_ID(env, android_app->isAndroidTV, class,
          "isAndroidTV", "()Z");
    GET_METHOD_ID(env, android_app->getPowerstate, class,

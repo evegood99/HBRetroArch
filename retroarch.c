@@ -221,6 +221,11 @@
 #include "lakka.h"
 #endif
 
+#ifdef ANDROID
+/* HB: frontend/drivers/platform_unix.c - AUTOSAVESTATE = "1" on the intent */
+bool android_hb_autosave_leave(void);
+#endif
+
 #define _PSUPP(var, name, desc) printf("  %s:\n\t\t%s: %s\n", name, desc, var ? "yes" : "no")
 
 #define FAIL_CPU(simd_type) do { \
@@ -3627,6 +3632,12 @@ bool command_event(enum event_command cmd, void *data)
             if (settings->bools.savestate_auto_save &&
                 runloop_st->current_core_type != CORE_TYPE_DUMMY)
                command_event_save_auto_state();
+#ifdef ANDROID
+            /* HB: AUTOSAVESTATE=1 - also with savestate_auto_save off */
+            else if (runloop_st->current_core_type != CORE_TYPE_DUMMY
+                  && android_hb_autosave_leave())
+               command_event_hb_leave_save_state(false);
+#endif
 
             /* Save last selected disk index, if required */
             if (sys_info)
@@ -4241,6 +4252,13 @@ bool command_event(enum event_command cmd, void *data)
                command_event_save_auto_state();
                content_wait_for_save_state_task();
             }
+#ifdef ANDROID
+            /* HB: AUTOSAVESTATE=1 - also with savestate_auto_save off */
+            else if (   runloop_st
+                     && (runloop_st->flags & RUNLOOP_FLAG_CORE_RUNNING)
+                     && android_hb_autosave_leave())
+               command_event_hb_leave_save_state(false);
+#endif
 
             /* Save last selected disk index, if required */
             if (sys_info)
@@ -8635,6 +8653,12 @@ bool retroarch_main_quit(void)
       if (   settings->bools.savestate_auto_save
           && runloop_st->current_core_type != CORE_TYPE_DUMMY)
          command_event_save_auto_state();
+#ifdef ANDROID
+      /* HB: AUTOSAVESTATE=1 - also with savestate_auto_save off */
+      else if (runloop_st->current_core_type != CORE_TYPE_DUMMY
+            && android_hb_autosave_leave())
+         command_event_hb_leave_save_state(false);
+#endif
 
       /* If any save states are in progress, wait
        * until all tasks are complete (otherwise
