@@ -89,6 +89,9 @@ public final class RetroActivityFuture extends RetroActivityCamera {
     if ((newRom != null && !newRom.equals(currentRom)) ||
         (newCore != null && !newCore.equals(currentCore)) ||
         (newRom != null && entrySlot(intent) != null)) {
+      // HB: 끝내기 전에 지금 게임을 나갈 때처럼 저장한다(롬저장, AUTOSAVESTATE 면 .state.auto).
+      // 홈에서 온 요청이면 이미 썼으니 롬저장만 다시 쓰고 상태저장은 건너뛴다.
+      leaveSave();
       // HB: 업스트림 #18587 — 새 작업으로 다시 띄운 뒤 끝낸다. 끝내기만 하면 다시 보내지 않는
       // 프런트엔드(Pegasus 등)는 다른 게임을 한 번 더 눌러야 했다.
       Intent restartIntent = new Intent(intent);
@@ -98,6 +101,18 @@ public final class RetroActivityFuture extends RetroActivityCamera {
     } else {
       // Same content, just update intent
       setIntent(intent);
+    }
+  }
+
+  /** HB: 네이티브(platform_unix.c 가 RegisterNatives 로 붙임) — 메인 스레드가 나갈 때처럼 저장하고 끝나면(최대 5초) 돌아온다. */
+  private native void hbNativeLeaveSave();
+
+  private void leaveSave() {
+    try {
+      hbNativeLeaveSave();
+    } catch (UnsatisfiedLinkError e) {
+      // 네이티브가 아직 안 올라왔다 — 저장할 게임도 없다.
+      Log.w("HBLeaveSave", "native side not ready: " + e);
     }
   }
 
