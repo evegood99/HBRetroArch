@@ -60,6 +60,10 @@ bool content_auto_save_state(const char *path);
 /* HB: the same, written through a temporary file (leaving the game) */
 enum { HB_THUMB_NONE = 0, HB_THUMB_SCREEN, HB_THUMB_KEPT };
 bool content_hb_leave_save_state(const char *path, int thumb);
+/* HB: counts the times the game state changed other than by running
+ * (a state loaded, rewound or undone; a core reset) */
+void content_hb_state_changed(void);
+unsigned content_hb_state_changes(void);
 
 /* Check a ram state write to disk. */
 bool content_ram_state_pending(void);

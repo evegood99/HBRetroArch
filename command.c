@@ -1392,8 +1392,10 @@ size_t command_event_save_auto_state(void)
 }
 
 /* HB: core runtime when the screen picture for the leave save was kept
- * (hardware-rendered cores, onPause / focus lost); -1 when there is none. */
+ * (hardware-rendered cores, onPause / focus lost); -1 when there is none.
+ * A state loaded or a reset since makes it another scene. */
 static retro_time_t hb_pre_runtime = -1;
+static unsigned hb_pre_changes     = 0;
 
 /* HB: the game may be left (onPause, focus lost) - keep a picture of the
  * screen while the window is still there, for hardware-rendered cores
@@ -1412,7 +1414,10 @@ void command_event_hb_leave_precapture(void)
       return;
    start = cpu_features_get_time_usec();
    if (hb_screenshot_precapture())
+   {
       hb_pre_runtime = runloop_st->core_runtime_usec;
+      hb_pre_changes = content_hb_state_changes();
+   }
    RARCH_LOG("[State] HB kept a screen picture: %s in %d ms.\n",
          hb_pre_runtime >= 0 ? "yes" : "no",
          (int)((cpu_features_get_time_usec() - start) / 1000));
@@ -1427,13 +1432,15 @@ void command_event_hb_leave_precapture_drop(void)
 /* HB: AUTOSAVESTATE=1 (HB Launcher) - write the .state.auto file when the
  * game is left (home, sleep, relaunch, quit), whatever savestate_auto_save
  * says. Skipped when the core ran less than a second since the last one
- * for the same content, and where RetroArch refuses states (achievements
- * hardcore, netplay, replays). The current slot is not touched.
+ * for the same content and no state was loaded nor the core reset since,
+ * and where RetroArch refuses states (achievements hardcore, netplay,
+ * replays). The current slot is not touched.
  * @background: the activity is no longer in front (onSaveInstanceState). */
 bool command_event_hb_leave_save_state(bool background)
 {
    static char last_path[PATH_MAX_LENGTH];
    static retro_time_t last_runtime = -1;
+   static unsigned last_changes     = 0;
    char path[PATH_MAX_LENGTH];
    retro_time_t start;
    bool ret;
@@ -1464,6 +1471,7 @@ bool command_event_hb_leave_save_state(bool background)
    strlcat(path, ".auto", sizeof(path));
    if (     last_runtime >= 0
          && runtime - last_runtime < 1000000
+         && content_hb_state_changes() == last_changes
          && string_is_equal(path, last_path))
    {
       RARCH_LOG("[State] HB leave save skipped (ran %d ms since the last one).\n",
@@ -1483,7 +1491,9 @@ bool command_event_hb_leave_save_state(bool background)
        * kept one is shrunk, a screen-sized PNG takes seconds to write. */
       if (!background && !(runloop_get_flags() & RUNLOOP_FLAG_IDLE))
          command_event_hb_leave_precapture();
-      thumb = (hb_pre_runtime >= 0 && runtime - hb_pre_runtime < 1000000)
+      thumb = (     hb_pre_runtime >= 0
+                 && runtime - hb_pre_runtime < 1000000
+                 && content_hb_state_changes() == hb_pre_changes)
             ? HB_THUMB_KEPT : HB_THUMB_NONE;
    }
    else
@@ -1500,6 +1510,7 @@ bool command_event_hb_leave_save_state(bool background)
    {
       strlcpy(last_path, path, sizeof(last_path));
       last_runtime = runtime;
+      last_changes = content_hb_state_changes();
    }
    return ret;
 }

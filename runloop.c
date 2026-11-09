@@ -5495,9 +5495,17 @@ static bool display_menu_libretro(
       if (!(input_st->flags & INP_FLAG_BLOCK_LIBRETRO_INPUT))
          input_st->flags |= INP_FLAG_BLOCK_LIBRETRO_INPUT;
 
+#ifdef ANDROID
+      /* HB: the core runs behind the menu (menu_pause_libretro off) -
+       * activity commands wait until the frame ends here too */
+      android_hb_core_run_begin();
+#endif
       core_run();
       runloop_st->core_runtime_usec       +=
          runloop_core_runtime_tick(runloop_st, slowmotion_ratio, current_time);
+#ifdef ANDROID
+      android_hb_core_run_end();
+#endif
       input_st->flags                     &= ~INP_FLAG_BLOCK_LIBRETRO_INPUT;
 
       return false;
@@ -8046,6 +8054,7 @@ void core_reset(void)
    video_driver_state_t *video_st = video_state_get_ptr();
    video_st->frame_cache_data     = NULL;
    runloop_st->current_core.retro_reset();
+   content_hb_state_changed();   /* HB: the leave save's skip rule */
 }
 
 void core_run(void)

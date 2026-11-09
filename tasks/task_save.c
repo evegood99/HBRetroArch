@@ -931,8 +931,26 @@ static bool content_load_rastate1(unsigned char* input, size_t len)
    return true;
 }
 
+/* HB: see content_hb_state_changes */
+static unsigned hb_state_changes = 0;
+
+void content_hb_state_changed(void)
+{
+   hb_state_changes++;
+}
+
+/* HB: the leave save (command_event_hb_leave_save_state) skips a save and
+ * keeps a picture by game time; a state loaded, rewound or undone, or a
+ * core reset changes the scene without game time - counted here. */
+unsigned content_hb_state_changes(void)
+{
+   return hb_state_changes;
+}
+
 bool content_deserialize_state(const void *s, size_t len)
 {
+   /* HB: counted even when it fails - the core may be partly loaded */
+   content_hb_state_changed();
    if (memcmp(s, "RASTATE", 7) != 0)
    {
       /* old format is just core data, load it directly */
