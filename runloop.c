@@ -4354,6 +4354,11 @@ static bool event_init_content(
             /* Loading the state failed, reset entry slot */
             runloop_st->entry_state_slot = -1;
          }
+
+         /* HB: -e auto - load the .state.auto file once, whatever
+          * savestate_auto_load says; the current slot stays as it is */
+         if (runloop_st->hb_entry_auto)
+            command_event_load_auto_state();
       }
 
 #ifdef HAVE_BSV_MOVIE
@@ -4362,10 +4367,12 @@ static bool event_init_content(
 #endif
       {
          if (     runloop_st->entry_state_slot < 0
+               && !runloop_st->hb_entry_auto
                && settings->bools.savestate_auto_load)
             command_event_load_auto_state();
       }
    }
+   runloop_st->hb_entry_auto = false;
 
 #ifdef HAVE_BSV_MOVIE
    movie_stop(input_st);

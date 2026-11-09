@@ -1379,6 +1379,13 @@ static void content_load_init_wrap(
    }
 #endif
 
+   /* HB: start from a save state slot ("auto" goes through -e too) */
+   if (args->entry_slot)
+   {
+      argv[(*argc)++] = strldup("-e", sizeof("-e"));
+      argv[(*argc)++] = strdup(args->entry_slot);
+   }
+
    if (args->flags & RARCH_MAIN_WRAP_FLAG_VERBOSE)
       argv[(*argc)++] = strldup("-v", sizeof("-v"));
 }
@@ -1415,6 +1422,7 @@ static bool content_load(content_ctx_info_t *info,
    wrap_args->state_path     = NULL;
    wrap_args->config_path    = NULL;
    wrap_args->libretro_path  = NULL;
+   wrap_args->entry_slot     = NULL;
    wrap_args->flags          = 0;
    wrap_args->argc           = 0;
 

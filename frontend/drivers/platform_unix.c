@@ -605,6 +605,22 @@ bool test_permissions(const char *path)
    return ret;
 }
 
+/* HB: ENTRYSLOT value - "auto", "0" or 1-999 without leading zeros
+ * (-e reads the number with strtol base 0, so "010" would be octal) */
+static bool hb_entry_slot_valid(const char *s)
+{
+   size_t i;
+   size_t len = strlen(s);
+   if (string_is_equal(s, "auto") || string_is_equal(s, "0"))
+      return true;
+   if (len < 1 || len > 3 || s[0] < '1' || s[0] > '9')
+      return false;
+   for (i = 1; i < len; i++)
+      if (s[i] < '0' || s[i] > '9')
+         return false;
+   return true;
+}
+
 static void frontend_android_shutdown(bool unused)
 {
    (void)unused;
@@ -1412,6 +1428,7 @@ static void frontend_unix_get_env(int *argc,
       args->flags     |=   RARCH_MAIN_WRAP_FLAG_TOUCHED;
       args->sram_path  = NULL;
       args->state_path = NULL;
+      args->entry_slot = NULL;
    }
 
    frontend_android_get_version(&major, &minor, &rel);
@@ -1515,6 +1532,34 @@ static void frontend_unix_get_env(int *argc,
             "RetroArch", "[ENV] Auto-start game \"%s\".\n", path);
          if (args && *path)
             args->content_path = path;
+      }
+   }
+
+   /* HB: ENTRYSLOT - start from save state slot "0".."999" (like -e N)
+    * or "auto" (the .state.auto file once). Anything else is ignored. */
+   CALL_OBJ_METHOD_PARAM(env, jstr, obj, android_app->getStringExtra,
+         (*env)->NewStringUTF(env, "ENTRYSLOT"));
+
+   if (android_app->getStringExtra && jstr)
+   {
+      static char entry_slot[8];
+      const char *argv = (*env)->GetStringUTFChars(env, jstr, 0);
+
+      *entry_slot = '\0';
+
+      if (argv && hb_entry_slot_valid(argv))
+         strlcpy(entry_slot, argv, sizeof(entry_slot));
+      else
+         __android_log_print(ANDROID_LOG_WARN,
+            "RetroArch", "[ENV] Ignoring entry slot \"%s\".\n", argv ? argv : "");
+      (*env)->ReleaseStringUTFChars(env, jstr, argv);
+
+      if (*entry_slot)
+      {
+         __android_log_print(ANDROID_LOG_INFO,
+            "RetroArch", "[ENV] Entry slot \"%s\".\n", entry_slot);
+         if (args)
+            args->entry_slot = entry_slot;
       }
    }
 

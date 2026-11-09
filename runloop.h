@@ -268,6 +268,7 @@ struct runloop
 
    uint32_t flags;
    int8_t run_frames_and_pause;
+   bool hb_entry_auto; /* HB: -e auto - load the .state.auto file once */
 
    char runtime_content_path_basename[PATH_MAX_LENGTH];
 #ifdef HAVE_SCREENSHOTS

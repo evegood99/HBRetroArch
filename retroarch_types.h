@@ -246,6 +246,7 @@ struct rarch_main_wrap
    const char *state_path;
    const char *config_path;
    const char *libretro_path;
+   const char *entry_slot; /* HB: "0".."999" or "auto", passed on as -e */
    int argc;
    uint8_t flags;
 };

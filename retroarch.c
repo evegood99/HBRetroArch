@@ -7226,6 +7226,7 @@ static bool retroarch_parse_input_and_config(
 
    /* Reset entry slot */
    runloop_st->entry_state_slot = -1;
+   runloop_st->hb_entry_auto    = false;
 
    /* Load the config file now that we know what it is */
 #ifdef HAVE_CONFIGFILE
@@ -7590,7 +7591,16 @@ static bool retroarch_parse_input_and_config(
             case 'e':
                {
                   char *endptr;
-                  long entry_state_slot = strtol(optarg, &endptr, 0);
+                  long entry_state_slot;
+
+                  /* HB: "auto" loads the .state.auto file once (runloop.c) */
+                  if (string_is_equal(optarg, "auto"))
+                  {
+                     runloop_st->hb_entry_auto = true;
+                     break;
+                  }
+
+                  entry_state_slot = strtol(optarg, &endptr, 0);
 
                   if (endptr == optarg || *endptr != '\0' ||
                       entry_state_slot < 0 || entry_state_slot > 999)
@@ -7689,18 +7699,20 @@ static bool retroarch_parse_input_and_config(
        * command line interface */
       cli_content_set = true;
    }
-   else if (runloop_st->entry_state_slot > -1)
+   else if (runloop_st->entry_state_slot > -1 || runloop_st->hb_entry_auto)
    {
       runloop_st->entry_state_slot = -1;
+      runloop_st->hb_entry_auto    = false;
       RARCH_WARN("[State] Trying to load entry state without content. Ignoring.\n");
    }
    #ifdef HAVE_BSV_MOVIE
-   if (runloop_st->entry_state_slot > -1)
+   if (runloop_st->entry_state_slot > -1 || runloop_st->hb_entry_auto)
    {
      input_driver_state_t *input_st = input_state_get_ptr();
      if (input_st->bsv_movie_state.flags & BSV_FLAG_MOVIE_START_PLAYBACK)
      {
         runloop_st->entry_state_slot = -1;
+        runloop_st->hb_entry_auto    = false;
         RARCH_WARN("[State] Trying to load entry state while replay playback is active. Ignoring entry state.\n");
      }
    }
