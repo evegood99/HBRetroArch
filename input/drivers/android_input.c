@@ -500,6 +500,12 @@ static void android_input_poll_main_cmd(void)
          break;
 
       case APP_CMD_SAVE_STATE:
+         /* HB: the activity is going to the background (home, sleep) and
+          * may be killed from there - a frontend asking for another game or
+          * a save state slot makes it exit at once. Write the save RAM now
+          * instead of leaving up to autosave_interval seconds unsaved. */
+         if (runloop_state_get_ptr()->current_core.flags & RETRO_CORE_FLAG_GAME_LOADED)
+            command_event(CMD_EVENT_SAVE_FILES, NULL);
          slock_lock(android_app->mutex);
          android_app->stateSaved = 1;
          scond_broadcast(android_app->cond);
