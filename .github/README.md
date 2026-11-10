@@ -35,8 +35,9 @@ HB RetroArch 는 RetroArch 1.22.2 에 공급자(ContentProvider) 하나를 더�
 | 게임 중 프론트엔드에서 다른 게임 고르기 | RetroArch 가 끝나기만 해서 한 번 더 골라야 뜸 | 한 번에 새 게임이 뜹니다 |
 | 상태저장 그림 | 안드로이드는 기본으로 만들지 않음 | 기본으로 만듭니다(해방런처 세이브 창에 보임) |
 | 프론트엔드에서 상태저장을 골라 시작 | 안드로이드는 방법이 없음 | 실행 값 `ENTRYSLOT` 으로 그 슬롯에서 시작합니다 |
-| 홈 · 슬립으로 나갈 때 롬저장(.srm) | 마지막 몇 초 몫이 아직 안 써졌을 수 있음(10초마다 씀) | 나가는 순간 씁니다 |
+| 홈 · 슬립으로 나갈 때 롬저장(.srm) | 마지막 몇 초 몫이 아직 안 써졌을 수 있음(10초마다 씀) | 나가는 순간 씁니다. 나가 있는 동안은 다시 쓰지 않습니다 |
 | 나갈 때 자동 상태저장 | 게임을 닫을 때만 | 프론트엔드가 `AUTOSAVESTATE=1` 을 주면 홈 · 슬립 · 다른 게임 · 끝낼 때마다 씁니다 |
+| 다른 앱이 세이브를 바꾼 뒤 다시 켜기 | 뒤에 떠 있던 게임이 메모리의 옛 세이브로 그 파일을 덮음 | 실행 값 `RELOADSAVES=1` 이면 떠 있던 게임은 쓰지 않고 바뀐 세이브로 새로 켭니다 |
 | ABI | 빌드마다 다름 | arm64-v8a + armeabi-v7a (한 APK) |
 | 세이브 · 스테이트 · BIOS · 재생목록 | `/storage/emulated/0/RetroArch` | **같은 폴더를 함께 씁니다** |
 | 설정(retroarch.cfg) · 코어 | 앱마다 | 따로입니다(`Android/data/com.haebang.retroarch/files`) |
@@ -64,6 +65,8 @@ am start -n com.haebang.retroarch/com.retroarch.browser.retroactivity.RetroActiv
 
 - **상태저장에서 시작** — `-e ENTRYSLOT 2` 처럼 슬롯 번호(0~999)를 주면 그 상태저장에서 시작합니다. `auto` 는 자동 상태저장입니다.
   그 게임이 이미 떠 있어도 다시 띄워 그 장면에서 시작합니다(hb8 부터).
+- **세이브를 바꾼 뒤 켜기** — 세이브 파일을 바깥에서 바꿨다면 `-e RELOADSAVES 1` 을 함께 줍니다.
+  뒤에 떠 있던 게임은 세이브를 쓰지 않고 끝나고, 바뀐 세이브로 새로 켭니다(hb10 부터, 해방런처 세이브 동기화).
 - **ES-DE** — `ES-DE/custom_systems/es_find_rules.xml` 의 `RETROARCH` 항목 맨 앞에
   `com.haebang.retroarch/com.retroarch.browser.retroactivity.RetroActivityFuture` 를 넣습니다.
   ES-DE 를 다시 켜면 이 앱을 먼저 씁니다. 해방툴로 내보내면 자동으로 써 줍니다.
@@ -152,6 +155,9 @@ RetroArch 가 꺼지는 문제입니다(안드로이드 13, Vulkan · GL 모두)
   - 파일은 임시 파일에 다 쓴 뒤 바꿔 넣고, 그림을 못 만들면 옛 그림을 지웁니다.
   - N64 · PS1 처럼 GPU 로 그리는 코어는 화면이 사라지기 전(포커스를 잃는 순간)에 그림을 떠 둡니다.
   - 슬립으로 나갈 때는 저장이 끝날 때까지 기기가 잠들지 않게 붙잡습니다(그래서 '절전 모드 해제' 권한이 더해졌습니다).
+- **세이브를 바꾼 뒤 새로 켜기(hb10)**: 해방런처가 PC 의 세이브를 받아 기기 세이브를 바꿀 때를 위해 넣었습니다.
+  - 실행 값 `RELOADSAVES=1` 이면 같은 게임이 떠 있어도 다시 띄우고, 떠 있던 게임의 롬저장 · 자동 상태저장은 쓰지 않습니다.
+  - 나가 있는 동안 10초마다 도는 자동 저장이 롬저장을 한 번 더 써서 바뀐 세이브를 덮던 것도 고쳤습니다.
 
 ## 소스에서 빌드
 
@@ -163,12 +169,13 @@ python haebang\build.py        # → haebang\out\HBRetroArch-1.22.2-<hb 번호>.
 - 메뉴 그림 · 코어 정보 · 셰이더 같은 assets 는 RetroArch 저장소에 없습니다. `build.py` 가 같은 버전 공식 APK 에서 풀어 넣습니다.
 - 서명 열쇠는 처음 빌드할 때 `haebang/keystore/` 에 만듭니다. git 에는 올리지 않습니다.
 
-고친 업스트림 파일은 열아홉입니다(대부분 몇 줄).
+고친 업스트림 파일은 스물입니다(대부분 몇 줄).
 - `pkg/android/phoenix/build.gradle` — 맛 `haebang`
 - `input/drivers/android_input.c` — 동시 입력, 홈 · 슬립으로 나갈 때 롬저장 · 자동 상태저장, 안드로이드 명령을 코어 프레임 밖에서 처리
+- `save.c` — 나갈 때 쓴 롬저장을 자동 저장이 나가 있는 동안 다시 쓰지 않게
 - `gfx/video_thread_wrapper.c` — 스레드된 비디오에서 슬립 · 홈에서 돌아올 때 꺼지던 것
 - `MainMenuActivity.java` — 안드로이드 13+ 에서 아이콘으로 켤 때 알림 허용 창이 덮여 매번 다시 뜨던 것
-- `RetroActivityFuture.java` — 120Hz 화면의 주기적 끊김, 프론트엔드로 바로 켤 때도 기본 자료(글꼴 · 아이콘) 풀기, 상태저장 그림 켜기, 다른 게임을 고르면 한 번에 다시 띄우기(업스트림 #18587) · `ENTRYSLOT` 이면 같은 게임도 다시 띄우기 · 나갈 때 저장 동안 CPU 깨워 두기
+- `RetroActivityFuture.java` — 120Hz 화면의 주기적 끊김, 프론트엔드로 바로 켤 때도 기본 자료(글꼴 · 아이콘) 풀기, 상태저장 그림 켜기, 다른 게임을 고르면 한 번에 다시 띄우기(업스트림 #18587) · `ENTRYSLOT` 이면 같은 게임도 다시 띄우기 · `RELOADSAVES` 면 쓰지 않고 다시 띄우기 · 나갈 때 저장 동안 CPU 깨워 두기
 - `config.def.h` — 안드로이드도 상태저장 그림 기본 켜짐
 - `frontend/drivers/platform_unix.c` · `retroarch_types.h` · `tasks/task_content.c` · `retroarch.c` · `runloop.h` · `runloop.c` — 실행 값 `ENTRYSLOT` 을 명령줄 `-e` 로 넘기기, `-e auto`
 - `frontend/drivers/platform_unix.h` · `command.c` · `command.h` · `content.h` · `tasks/task_save.c` · `tasks/task_screenshot.c` · `tasks/tasks_internal.h` — 나갈 때 자동 상태저장
@@ -192,4 +199,4 @@ python haebang\build.py        # → haebang\out\HBRetroArch-1.22.2-<hb 번호>.
 
 ### English (short)
 
-**HB RetroArch** is an unofficial build of RetroArch 1.22.2 for Android (package `com.haebang.retroarch`, installs alongside the official app). It adds a *core bridge* (`content://com.haebang.retroarch.cores`) through which other apps can list installed cores and ask the app to download cores from the official libretro buildbot, and look up where a game's saves and save states go. Save state thumbnails are on by default, and a frontend can start a game from a save state slot with the `ENTRYSLOT` intent extra (a number or `auto`); with `AUTOSAVESTATE=1` it writes the auto save state whenever the game is left (home, sleep, another game, quit). It also fixes simultaneous gamepad presses, stutter on 120 Hz screens and a crash when returning from sleep with threaded video. It is not affiliated with or endorsed by libretro. Source is GPLv3; see [haebang/README.md](https://github.com/evegood99/HBRetroArch/blob/haebang/haebang/README.md) for the API and build instructions.
+**HB RetroArch** is an unofficial build of RetroArch 1.22.2 for Android (package `com.haebang.retroarch`, installs alongside the official app). It adds a *core bridge* (`content://com.haebang.retroarch.cores`) through which other apps can list installed cores and ask the app to download cores from the official libretro buildbot, and look up where a game's saves and save states go. Save state thumbnails are on by default, and a frontend can start a game from a save state slot with the `ENTRYSLOT` intent extra (a number or `auto`); with `AUTOSAVESTATE=1` it writes the auto save state whenever the game is left (home, sleep, another game, quit); with `RELOADSAVES=1` it relaunches from the save files on disk without writing the saves of a game still running in the background (for frontends that sync saves). It also fixes simultaneous gamepad presses, stutter on 120 Hz screens and a crash when returning from sleep with threaded video. It is not affiliated with or endorsed by libretro. Source is GPLv3; see [haebang/README.md](https://github.com/evegood99/HBRetroArch/blob/haebang/haebang/README.md) for the API and build instructions.

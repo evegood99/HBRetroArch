@@ -19,17 +19,19 @@
 | 상태저장 그림 | 안드로이드는 기본 꺼짐 | 기본 켜짐 · 이미 깐 기기도 한 번 켬(해방런처 세이브 창) |
 | 상태저장에서 시작 | 명령줄 `-e N` 뿐(안드로이드 인텐트로는 못 넘김) | 인텐트 `ENTRYSLOT`(슬롯 번호 · `auto`), 같은 게임이 떠 있어도 다시 띄움 |
 | 세이브 폴더를 바깥에서 | 앱 전용 설정 파일이라 짐작만 | 코어 브릿지 `saves` 조회 |
-| 홈 · 슬립으로 나갈 때 롬저장 | `autosave_interval`(기본 10초)마다만 씀 | 바로 씀 |
+| 홈 · 슬립으로 나갈 때 롬저장 | `autosave_interval`(기본 10초)마다만 씀 | 바로 씀 · 뒤로 간 동안은 자동 저장이 다시 쓰지 않음(hb10) |
 | 나갈 때 자동 상태저장 | 콘텐츠를 닫을 때만(`savestate_auto_save`) | 인텐트 `AUTOSAVESTATE=1` 이면 홈 · 슬립 · 다른 게임 · 끝낼 때 `.state.auto` + 그림 |
+| 바깥에서 세이브를 바꾼 뒤 다시 켜기 | 뒤에 떠 있던 게임이 메모리의 옛 세이브로 그 파일을 덮음 | 인텐트 `RELOADSAVES=1` 이면 떠 있던 게임은 쓰지 않고 디스크에서 새로 켬(hb10) |
 | 안드로이드 명령(포커스 · 저장 등) | 코어가 프레임을 도는 도중(`retro_run` 안 입력 읽기)에도 처리 | 프레임이 끝난 뒤 처리 |
 | 바탕 | v1.22.2 | v1.22.2 + `pkg/android/phoenix/haebang/` + `input/drivers/android_input.c` + 첫 화면 알림 창 기다리기 |
 
-고친 업스트림 파일은 열아홉이다(대부분 몇 줄).
+고친 업스트림 파일은 스물이다(대부분 몇 줄).
 - `pkg/android/phoenix/build.gradle` — 맛 `haebang`
-- `input/drivers/android_input.c` — 동시 입력 · 나갈 때 롬저장 · 자동 상태저장 · 명령을 프레임 밖에서 처리
+- `input/drivers/android_input.c` — 동시 입력 · 나갈 때 롬저장 · 자동 상태저장 · 명령을 프레임 밖에서 처리 · 슬립에서 포커스를 늦게 잃으면 롬저장 다시
+- `save.c` — 나갈 때 쓴 롬저장을 자동 저장 스레드의 사본으로도 삼기(뒤로 간 동안 다시 쓰지 않게)
 - `gfx/video_thread_wrapper.c` — 영상 스레드를 JVM 에 붙이기
 - `pkg/android/phoenix/src/com/retroarch/browser/mainmenu/MainMenuActivity.java` — 알림 허용 창 기다리기
-- `pkg/android/phoenix/src/com/retroarch/browser/retroactivity/RetroActivityFuture.java` — 화면 주사율 맞추기 · 기본 자료 풀기 · 상태저장 그림 켜기 · 다른 게임 / `ENTRYSLOT` 다시 띄우기 · 나갈 때 저장 동안 CPU 깨워 두기
+- `pkg/android/phoenix/src/com/retroarch/browser/retroactivity/RetroActivityFuture.java` — 화면 주사율 맞추기 · 기본 자료 풀기 · 상태저장 그림 켜기 · 다른 게임 / `ENTRYSLOT` 다시 띄우기 · `RELOADSAVES` 면 쓰지 않고 다시 띄우기 · 나갈 때 저장 동안 CPU 깨워 두기
 - `config.def.h` — 상태저장 그림 기본값(안드로이드도 켜짐)
 - `frontend/drivers/platform_unix.c` · `retroarch_types.h` · `tasks/task_content.c` · `retroarch.c` · `runloop.h` · `runloop.c` — `ENTRYSLOT` 을 `-e` 로 넘기기 · `-e auto`
 - `frontend/drivers/platform_unix.h` · `command.c` · `command.h` · `content.h` · `tasks/task_save.c` · `tasks/task_screenshot.c` · `tasks/tasks_internal.h`
@@ -86,6 +88,7 @@ python haebang\build.py
 - `saves` — `saves` 조회
 - `thumb_default` — 상태저장 그림 기본 켜짐
 - `autosave_leave` — 인텐트 `AUTOSAVESTATE`(나갈 때 자동 상태저장, hb9)
+- `reload_saves` — 인텐트 `RELOADSAVES`(바깥에서 세이브를 바꾼 뒤 떠 있던 게임을 쓰지 않고 디스크에서 새로 켜기, hb10)
 
 ### 읽기 — `content query`
 
@@ -255,6 +258,9 @@ am start -n com.haebang.retroarch/com.retroarch.browser.retroactivity.RetroActiv
 **나갈 때 자동 상태저장 — `-e AUTOSAVESTATE 1`**(hb9, 글자 추가값) — 아래 '나갈 때 자동 상태저장'. `ENTRYSLOT` 과 함께 줄 수 있다.
 값은 `"1"` 만 켬이다. 다른 값 · 없음이면 예전처럼 `savestate_auto_save` 설정만 따른다.
 
+**바깥에서 세이브를 바꾼 뒤 — `-e RELOADSAVES 1`**(hb10, 글자 추가값) — 아래 '다른 게임 요청'. 값은 `"1"` 만 켬이다.
+`ENTRYSLOT` · `AUTOSAVESTATE` 와 함께 줄 수 있고, 그 값들은 새로 뜬 게임에 그대로 따른다.
+
 ## 패드 버튼 동시 입력 (입력 스레드)
 
 안드로이드 RetroArch 에서 두 버튼을 동시에 눌러도 게임이 동시 입력으로 받지 못하는 문제
@@ -373,6 +379,41 @@ Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0 in tid … (Thre
 **hb8** — 같은 게임이라도 새 요청에 올바른 `ENTRYSLOT` 이 있으면 같은 길로 다시 띄운다. 해방런처는 QUITFOCUS 를 넘기지 않아
 RetroArch 가 그 게임으로 뒤에 떠 있는 일이 흔하다. 다시 띄우지 않으면 '이 상태로 시작'이 그냥 이어 하기가 된다.
 
+**hb9** — 다시 띄우기 전에 지금 게임을 나갈 때처럼 저장한다(`hbNativeLeaveSave`, 아래 '나갈 때 자동 상태저장').
+
+**hb10 — `RELOADSAVES`**. 해방런처 세이브 동기화(2단계)는 PC 의 세이브를 받아 기기의 `.srm` · `.stateN` 을 바꾼다.
+그런데 RetroArch 가 그 게임을 뒤에 든 채 살아 있으면 받은 파일이 곧 덮인다.
+- 같은 게임 요청은 이어 하기가 된다. 메모리의 옛 SRAM 이 다음 자동 저장이나 다음 나가기 때 쓰인다.
+- 다른 게임 · `ENTRYSLOT` 요청도 다시 띄우기 전에 hb9 의 나갈 때 저장이 옛 롬저장(과 `.state.auto`)을 쓴다.
+- 런처는 RetroArch 가 떠 있는지 알 수 없다(안드로이드 11+ 은 다른 앱 프로세스를 못 본다).
+
+그래서 새 요청에 `RELOADSAVES` = `"1"` 이 있으면 다음처럼 한다.
+- 같은 게임이어도 같은 길(새 작업 + `System.exit(0)`)로 다시 띄운다. `ROM` 이 없어도 다시 띄운다.
+- 다시 띄우기 전에 나갈 때 저장을 부르지 않는다. 떠 있던 게임은 뒤로 갈 때 롬저장을 이미 썼고(hb8), 그 뒤로 돌지 않았으니 잃을 것이 없다.
+  - 앞에 떠 있는 채로 오면(adb 등) 마지막 `autosave_interval` 몫을 잃을 수 있다. 런처는 자기 화면에서만 보낸다.
+- 프로세스가 없어 새로 뜨는 경우(`onCreate`)는 할 일이 없다. 디스크에서 읽는 것이 원래 동작이다.
+- logcat `HBLeaveSave: RELOADSAVES: relaunching without saving the running game`.
+
+시스템 로그에 `WindowManager: Exception thrown during dispatchAppVisibility … EXITING` 이 남을 수 있다.
+옛 프로세스가 끝난 창에 화면 상태를 알리려다 나는 경고로, 다시 띄우는 길(hb7 부터)에서는 늘 나온다.
+
+**확인(hb10, RG 476H · Snes9x)** — 사본 cfg · 시험 폴더. A = Final Fantasy Mystic Quest(SRAM 8KB, 타이틀에서는 안 바꿈),
+B = Super Mario World, Y = 요시 아일랜드(SRAM 을 계속 바꿈). '바꿈' 은 그 파일 끝 16바이트를 다른 값으로 바꿔 둔 것(런처가 받은 것처럼).
+
+| 시험 | 결과 |
+|---|---|
+| Y 를 하다 홈 | `.srm` 을 바로 씀(나갈 때 쓰기 1번) |
+| A 홈 → `.srm` 바꿈 → A + `RELOADSAVES` | 새 pid(0.4초). 10초 뒤에도 바꾼 그대로. 다시 홈 → 새 게임의 SRAM 도 바꾼 내용(디스크에서 읽어 시작) |
+| A 홈 → `.srm` 바꿈 → B + `RELOADSAVES` | 새 pid. A 의 `.srm` 은 B 를 하다 홈한 뒤에도 바꾼 그대로 |
+| A(`AUTOSAVESTATE`) 홈 → `.state.auto` · `.srm` 바꿈 → B + `RELOADSAVES` | 둘 다 바꾼 그대로 |
+| `RELOADSAVES` 없이 같은 게임 / 다른 게임 | 같은 pid 로 이어 하기 / 저장 후 다시 띄움(바꾼 `.srm` 이 떠 있던 SRAM 으로 덮임 — hb9 와 같음) |
+| A + `RELOADSAVES` + `ENTRYSLOT 2` | 새 pid, `.state2` 를 불러옴, `.srm` 바꾼 그대로 |
+| Y 홈 → 30초 | `.srm` 수정 시각 그대로. 이어 하면 10초마다 다시 씀 |
+| Y 홈 → 곧바로 `.srm` 바꿈 → 15초 | 5번 모두 그대로(hb9 는 3번 중 2번 덮임) |
+| A 가 앞에 떠 있는 채로 `.srm` 바꿈 → A + `RELOADSAVES` | 쓰지 않음, 새 게임은 바꾼 내용 |
+| Y 가 앞에 떠 있는 채로 다른 게임 | 0.5초에 다시 뜸, Y 의 롬저장을 씀(자동 저장 잠금 안에서 저장 — 멈추지 않음) |
+| Y 슬립 30초 → 깨우기 | `.srm` 그대로, 같은 pid 로 이어짐 |
+
 ## 홈 · 슬립으로 나갈 때 롬저장 쓰기
 
 다시 띄우는 길은 `System.exit(0)` 로 끝나 RetroArch 의 마지막 쓰기를 건너뛴다. 롬저장(.srm)은 자동 저장 스레드가
@@ -385,6 +426,20 @@ RetroArch 가 그 게임으로 뒤에 떠 있는 일이 흔하다. 다시 띄우
   - 이 명령은 안드로이드 쪽이 답을 기다리는 명령이라, 다 쓴 뒤에 뒤로 간다.
 - 그래서 런처가 세이브 창을 열 때 .srm 은 최신이다. 그 뒤 `ENTRYSLOT` · 다른 게임으로 다시 띄워도 잃을 것이 없다.
 - 게임이 앞에 떠 있는 채로 요청이 오면(adb 등) 나간 적이 없으니 최대 `autosave_interval` 몫은 여전히 쓰이지 않을 수 있다.
+
+**hb10 — 뒤로 간 동안 자동 저장 스레드가 다시 쓰던 것**
+- 자동 저장 스레드는 `autosave_interval` 마다 지난번 사본과 코어의 SRAM 을 견줘, 다르면 파일에 쓴다.
+- 나갈 때 쓰는 롬저장(`CMD_EVENT_SAVE_FILES`)은 이 사본을 고치지 않았다. 그래서 마지막 차례 뒤에 바뀐 SRAM 을
+  다음 차례(나간 뒤 최대 10초)에 한 번 더 썼다. 그 사이 런처가 받은 파일은 옛 SRAM 으로 덮였다.
+  - hb9 재현: 요시 아일랜드(SuperFX, SRAM 을 작업 메모리로 계속 바꿈)를 하다 홈 → 곧바로 `.srm` 을 바꿔 둠 → 3번 중 2번 3.0초 · 6.5초 뒤 덮였다.
+- **고침**(`save.c`) — 롬저장 한 칸을 다 쓰면 그 칸의 스레드 사본도 지금 SRAM 으로 맞춘다(`autosave_hb_written`).
+  - 뒤로 간 동안은 게임이 돌지 않으니 스레드는 쓸 것이 없다. 게임을 이어 하면 SRAM 이 바뀔 때 다시 쓴다.
+  - 메인 스레드는 프레임 동안 스레드의 잠금을 쥐고, 안드로이드 명령은 그 프레임 끝(`android_hb_core_run_end`)에서 처리한다.
+    그래서 잠금을 쥔 동안이면 다시 잡지 않고 바로 맞춘다(다시 잡으면 멈춘다).
+- **슬립**(`android_input.c`) — 슬립에서는 onStop · onSaveInstanceState(나갈 때 저장)가 포커스 잃음보다 먼저 올 때가 많다.
+  그 사이 몇 프레임이 돌아 SRAM 이 바뀌면, 그 몫을 스레드가 5~8초 뒤에 썼다(hb10 첫 빌드, 슬립 11번 중 6번).
+  - 포커스를 잃을 때 이미 멈춤(`APP_CMD_STOP`) 뒤면 롬저장을 바로 한 번 더 쓴다. 로그 `[SRAM] HB: focus lost after the leave save - writing again.`
+  - 고친 뒤 슬립 6번: 5번이 이 길을 탔고, 22초 동안 늦게 쓴 것은 없었다.
 
 ## 상태저장 그림
 
