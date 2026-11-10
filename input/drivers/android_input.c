@@ -662,6 +662,19 @@ static void android_input_poll_main_cmd(void)
                   && android_hb_autosave_leave())
                command_event_hb_leave_precapture();
 
+            /* HB: sleep - onStop and onSaveInstanceState (the leave save)
+             * can come before the focus loss, and the game ran until now.
+             * Write the save RAM again at once: left to the autosave
+             * thread, those frames would be written up to
+             * autosave_interval seconds later, while the game is left -
+             * over a file another app may have replaced by then. */
+            if (     android_app->activityState == APP_CMD_STOP
+                  && (runloop_st->current_core.flags & RETRO_CORE_FLAG_GAME_LOADED))
+            {
+               RARCH_LOG("[SRAM] HB: focus lost after the leave save - writing again.\n");
+               command_event(CMD_EVENT_SAVE_FILES, NULL);
+            }
+
             runloop_st->flags |=  (RUNLOOP_FLAG_PAUSED
                                  | RUNLOOP_FLAG_IDLE);
             video_driver_set_stub_frame();
