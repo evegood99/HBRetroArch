@@ -284,6 +284,36 @@ void autosave_deinit(void)
    autosave_state.num      = 0;
 }
 
+/* HB: the main thread holds the locks (between autosave_lock and _unlock) */
+static bool autosave_hb_locked = false;
+
+/* HB: save RAM slot @slot was just written to disk outside the autosave
+ * thread (the leave save, CMD_EVENT_SAVE_FILES). Take it as the thread's
+ * last copy too. Otherwise the thread still holds the copy from its last
+ * round and writes the same save RAM again up to autosave_interval seconds
+ * later - while the game is left, over a file another app (the launcher's
+ * save sync) may have replaced by then. The game does not run while it is
+ * left, so after this the thread has nothing to write until it runs again. */
+static void autosave_hb_written(unsigned slot)
+{
+   autosave_t *handle;
+
+   if (slot >= autosave_state.num || !(handle = autosave_state.list[slot]))
+      return;
+
+   /* runloop_iterate holds the locks around a frame, and the activity
+    * commands are handled when the frame ends (android_hb_core_run_end),
+    * still inside - the thread is then waiting, not copying. */
+   if (autosave_hb_locked)
+      memcpy(handle->buffer, handle->retro_buffer, handle->bufsize);
+   else
+   {
+      slock_lock(handle->lock);
+      memcpy(handle->buffer, handle->retro_buffer, handle->bufsize);
+      slock_unlock(handle->lock);
+   }
+}
+
 /**
  * autosave_lock:
  *
@@ -299,6 +329,7 @@ void autosave_lock(void)
       if (handle)
          slock_lock(handle->lock);
    }
+   autosave_hb_locked = true;
 }
 
 /**
@@ -310,6 +341,7 @@ void autosave_unlock(void)
 {
    unsigned i;
 
+   autosave_hb_locked = false;
    for (i = 0; i < autosave_state.num; i++)
    {
       autosave_t *handle = autosave_state.list[i];
@@ -478,6 +510,10 @@ static bool content_save_ram_file(unsigned slot, bool compress)
    RARCH_LOG("[SRAM] %s \"%s\".\n",
          msg_hash_to_str(MSG_SAVED_SUCCESSFULLY_TO),
          ram.path);
+
+#ifdef HAVE_THREADS
+   autosave_hb_written(slot);
+#endif
 
    return true;
 
