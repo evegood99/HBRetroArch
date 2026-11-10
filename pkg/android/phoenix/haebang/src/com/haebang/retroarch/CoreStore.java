@@ -45,8 +45,8 @@ final class CoreStore
    static final String TAG = "HBCoreBridge";
    /** 2(hb8): saves 조회 · cores 의 corename · savestate 칸 · info 의 caps */
    static final int API_VERSION = 2;
-   /** 이 버전이 하는 일 — 런처는 이 글자로 기능을 확인한다(옛 버전에는 칸이 없다). autosave_leave 는 hb9. */
-   static final String CAPS = "entry_slot,saves,thumb_default,autosave_leave";
+   /** 이 버전이 하는 일 — 런처는 이 글자로 기능을 확인한다(옛 버전에는 칸이 없다). autosave_leave 는 hb9, reload_saves 는 hb10. */
+   static final String CAPS = "entry_slot,saves,thumb_default,autosave_leave,reload_saves";
    static final String SUFFIX = "_libretro_android.so";
    /** 플랫폼 꼬리가 없는 이름 — buildbot 에 이렇게 올라온 코어(Azahar)를 앱 안 온라인 업데이터가 받으면 이 이름으로 둔다. */
    static final String PLAIN_SUFFIX = "_libretro.so";

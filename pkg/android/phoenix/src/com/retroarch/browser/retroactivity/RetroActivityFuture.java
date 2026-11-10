@@ -85,14 +85,22 @@ public final class RetroActivityFuture extends RetroActivityCamera {
     String currentCore = currentIntent != null ? currentIntent.getStringExtra("LIBRETRO") : null;
     
     
+    // HB: RELOADSAVES — 바깥에서 세이브 파일을 바꿨다(해방런처 세이브 동기화). 떠 있던 게임은 쓰지 않고 디스크에서 새로 켠다.
+    boolean reloadSaves = "1".equals(intent.getStringExtra("RELOADSAVES"));
+
     // Check if we're trying to launch different content
     // HB: 같은 게임이라도 ENTRYSLOT(그 상태저장에서 시작)이 오면 다시 띄운다 — 그대로 두면 이어 하기가 된다.
     if ((newRom != null && !newRom.equals(currentRom)) ||
         (newCore != null && !newCore.equals(currentCore)) ||
-        (newRom != null && entrySlot(intent) != null)) {
+        (newRom != null && entrySlot(intent) != null) ||
+        reloadSaves) {
       // HB: 끝내기 전에 지금 게임을 나갈 때처럼 저장한다(롬저장, AUTOSAVESTATE 면 .state.auto).
       // 홈에서 온 요청이면 이미 썼으니 롬저장만 다시 쓰고 상태저장은 건너뛴다.
-      leaveSave();
+      // RELOADSAVES 면 쓰지 않는다 — 메모리의 옛 세이브가 바깥에서 바꾼 파일을 덮는다. 뒤로 갈 때 이미 썼다(hb8).
+      if (reloadSaves)
+        Log.i("HBLeaveSave", "RELOADSAVES: relaunching without saving the running game");
+      else
+        leaveSave();
       // HB: 업스트림 #18587 — 새 작업으로 다시 띄운 뒤 끝낸다. 끝내기만 하면 다시 보내지 않는
       // 프런트엔드(Pegasus 등)는 다른 게임을 한 번 더 눌러야 했다.
       Intent restartIntent = new Intent(intent);
