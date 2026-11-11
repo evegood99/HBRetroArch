@@ -212,7 +212,11 @@ public final class RetroActivityFuture extends RetroActivityCamera {
     super.onStop();
 
     // If QUITFOCUS parameter was set then completely exit RetroArch when focus is lost
-    if (quitfocus) System.exit(0);
+    // HB: 끝내기 전에 나갈 때처럼 저장한다 — onSaveInstanceState(나갈 때 저장)는 onStop 뒤에 와서, 여기서 끝나면 건너뛴다.
+    if (quitfocus) {
+      leaveSave();
+      System.exit(0);
+    }
   }
 
   @Override
