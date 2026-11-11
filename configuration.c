@@ -3974,6 +3974,13 @@ static bool config_load_file(global_t *global,
    for (i = 0; i < (unsigned)uint_settings_size; i++)
    {
       int tmp = 0;
+      /* HB: a value given on the command line (--port) stays when the
+       * configuration is read again for core / game overrides or
+       * --appendconfig. Upstream reads the file value back over it, so a
+       * netplay client connects to the port in retroarch.cfg instead. */
+      if (     uint_settings[i].override
+            && retroarch_override_setting_is_set(uint_settings[i].override, NULL))
+         continue;
       if (config_get_int(conf, uint_settings[i].ident, &tmp))
          *uint_settings[i].ptr = tmp;
    }

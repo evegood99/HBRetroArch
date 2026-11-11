@@ -430,8 +430,30 @@ public class CoreBridgeProvider extends ContentProvider
          r.put("ok", st.delete(id));
          return;
       }
+      if ("lib_version".equals(method))
+      {
+         // 코어가 스스로 말하는 이름 · 버전(retro_get_system_info) — 넷플레이 악수가 견주는 값. 읽기뿐이라 누구나.
+         String id = CoreStore.coreId(arg);
+         if (id == null)
+            throw new IllegalArgumentException("bad core name: " + arg);
+         File f = st.installedFile(id);
+         if (f == null)
+            throw new IllegalArgumentException("not installed: " + id);
+         String[] lib = st.libInfo(f);
+         r.put("core", id);
+         r.put("crc32", st.crc32(f));
+         if (lib == null)
+         {
+            r.put("ok", false);
+            r.put("error", "could not read the core");
+            return;
+         }
+         r.put("lib_name", lib[0]);
+         r.put("lib_version", lib[1]);
+         return;
+      }
       throw new IllegalArgumentException("unknown method: " + method
-            + " (ping · info · install · update · job · cancel · refresh_index · install_file · delete)");
+            + " (ping · info · install · update · job · cancel · refresh_index · install_file · delete · lib_version)");
    }
 
    /** 셸(adb, uid 2000) · root · 이 앱 자신 · MANAGE_CORES 서명 권한을 가진 앱만. */

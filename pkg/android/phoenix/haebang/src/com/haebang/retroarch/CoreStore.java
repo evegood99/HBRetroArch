@@ -45,8 +45,8 @@ final class CoreStore
    static final String TAG = "HBCoreBridge";
    /** 2(hb8): saves 조회 · cores 의 corename · savestate 칸 · info 의 caps */
    static final int API_VERSION = 2;
-   /** 이 버전이 하는 일 — 런처는 이 글자로 기능을 확인한다(옛 버전에는 칸이 없다). autosave_leave 는 hb9, reload_saves 는 hb10. */
-   static final String CAPS = "entry_slot,saves,thumb_default,autosave_leave,reload_saves,netplay";
+   /** 이 버전이 하는 일 — 런처는 이 글자로 기능을 확인한다(옛 버전에는 칸이 없다). autosave_leave 는 hb9, reload_saves 는 hb10, netplay · lib_version 은 hb11. */
+   static final String CAPS = "entry_slot,saves,thumb_default,autosave_leave,reload_saves,netplay,lib_version";
    static final String SUFFIX = "_libretro_android.so";
    /** 플랫폼 꼬리가 없는 이름 — buildbot 에 이렇게 올라온 코어(Azahar)를 앱 안 온라인 업데이터가 받으면 이 이름으로 둔다. */
    static final String PLAIN_SUFFIX = "_libretro.so";
@@ -389,6 +389,55 @@ final class CoreStore
          crcCache.put(f.getAbsolutePath(), c);
       }
       return hex;
+   }
+
+   // ---------------------------------------------------------------- 코어가 스스로 말하는 버전
+
+   /** platform_unix.c — 코어를 잠깐 실어 retro_get_system_info 를 부른다: { library_name, library_version }, 못 읽으면 null. */
+   private static native String[] nativeLibInfo(String path);
+
+   private static final class LibCache
+   {
+      long size;
+      long mtime;
+      String[] info;
+   }
+
+   private final Map<String, LibCache> libCache = new HashMap<>();
+
+   /**
+    * { library_name, library_version } — RetroArch 넷플레이 악수가 견주는 값(예 "v1.0.0.03 261110 GITa836e52").
+    * info 파일의 display_version 은 손으로 적는 글이라 실제 빌드와 다르다. 못 읽으면 null. 크기 · 시각이 같으면 다시 안 읽는다.
+    */
+   String[] libInfo(File f)
+   {
+      String key = f.getAbsolutePath();
+      synchronized (libCache)
+      {
+         LibCache c = libCache.get(key);
+         if (c != null && c.size == f.length() && c.mtime == f.lastModified())
+            return c.info;
+      }
+      LibCache c = new LibCache();
+      c.size = f.length();
+      c.mtime = f.lastModified();
+      try
+      {
+         // 게임을 한 번도 안 켠 프로세스(공급자만 깨어난 때)에는 네이티브 쪽이 아직 없다.
+         System.loadLibrary("retroarch-activity");
+         // 다른 기기용 .so 는 싣지 않는다.
+         c.info = abi().equals(elfAbi(f)) ? nativeLibInfo(key) : null;
+      }
+      catch (Throwable t)
+      {
+         Log.w(TAG, "lib info failed for " + f.getName(), t);
+         c.info = null;
+      }
+      synchronized (libCache)
+      {
+         libCache.put(key, c);
+      }
+      return c.info;
    }
 
    /** <info>/<core>_libretro.info 의 key = "value" 줄. 없으면 빈 지도. */

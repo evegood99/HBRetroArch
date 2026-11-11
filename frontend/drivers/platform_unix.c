@@ -57,6 +57,7 @@
 
 #ifdef ANDROID
 #include <sys/system_properties.h>
+#include <dlfcn.h>
 #ifdef HAVE_SAF
 #include <vfs/vfs_implementation_saf.h>
 #include "../../menu/menu_cbs.h"
@@ -725,6 +726,61 @@ void android_show_saf_tree_picker(void)
    CALL_VOID_METHOD(env, g_android->activity->clazz, g_android->requestOpenDocumentTree);
 }
 #endif
+
+/* HB: CoreStore.nativeLibInfo(path) - what a core tells about itself
+ * (retro_get_system_info): { library_name, library_version }, or NULL when
+ * the file cannot be loaded or is not a libretro core.
+ * HB Launcher compares it before a netplay room starts: the netplay
+ * handshake compares this library_version, and the display_version of the
+ * info file is hand-written text that does not follow the build. */
+static jstring hb_plain_jstring(JNIEnv *env, const char *s)
+{
+   char buf[128];
+   size_t i = 0;
+   /* NewStringUTF wants modified UTF-8 - keep printable ASCII only. */
+   for (; s && s[i] && i < sizeof(buf) - 1; i++)
+      buf[i] = (s[i] >= 0x20 && s[i] < 0x7f) ? s[i] : '?';
+   buf[i] = '\0';
+   return (*env)->NewStringUTF(env, buf);
+}
+
+JNIEXPORT jobjectArray JNICALL Java_com_haebang_retroarch_CoreStore_nativeLibInfo
+      (JNIEnv *env, jclass cls, jstring path_obj)
+{
+   struct retro_system_info info;
+   void (*get_info)(struct retro_system_info*) = NULL;
+   jobjectArray out = NULL;
+   void *lib        = NULL;
+   const char *path = (*env)->GetStringUTFChars(env, path_obj, NULL);
+
+   if (!path)
+      return NULL;
+   lib = dlopen(path, RTLD_LAZY | RTLD_LOCAL);
+   (*env)->ReleaseStringUTFChars(env, path_obj, path);
+   if (!lib)
+      return NULL;
+
+   get_info = (void (*)(struct retro_system_info*))
+      dlsym(lib, "retro_get_system_info");
+   if (get_info)
+   {
+      jclass str_class = (*env)->FindClass(env, "java/lang/String");
+      memset(&info, 0, sizeof(info));
+      get_info(&info);
+      /* The strings live in the core - copy them before it is closed. */
+      if (str_class && (out = (*env)->NewObjectArray(env, 2, str_class, NULL)))
+      {
+         jstring name    = hb_plain_jstring(env, info.library_name);
+         jstring version = hb_plain_jstring(env, info.library_version);
+         (*env)->SetObjectArrayElement(env, out, 0, name);
+         (*env)->SetObjectArrayElement(env, out, 1, version);
+         (*env)->DeleteLocalRef(env, name);
+         (*env)->DeleteLocalRef(env, version);
+      }
+   }
+   dlclose(lib);
+   return out;
+}
 
 /*
  * Class:     com_retroarch_browser_retroactivity_RetroActivityCommon

@@ -90,6 +90,11 @@ python haebang\build.py
 - `autosave_leave` — 인텐트 `AUTOSAVESTATE`(나갈 때 자동 상태저장, hb9)
 - `reload_saves` — 인텐트 `RELOADSAVES`(바깥에서 세이브를 바꾼 뒤 떠 있던 게임을 쓰지 않고 디스크에서 새로 켜기, hb10)
 - `netplay` — 인텐트 `NETPLAY`(`host` | `client`) · `NETPLAYPORT`(1024~65535) · `NETPLAYNICK`(hb11). 해방런처 온라인 오락실의 방: `--host` / `--connect 127.0.0.1` 과 같고, 방장은 127.0.0.1 만 듣고 LAN 찾기 응답 · 공개 로비 알림 · UPnP · 공식 중계를 하지 않는다. 참가자는 방장과 끊기거나 못 붙으면 게임을 끝낸다(런처로 돌아감). 세이브는 RetroArch 가 `<세이브 폴더>/.netplay/` 로 돌린다. 설계 · 실측: 해방툴 저장소 `docs/HBARCADE_NETPLAY_REVIEW_2026-11-10.md` 11절
+  - 준 포트는 설정을 다시 읽어도 남는다(11/12 고침, `configuration.c`): 원본은 게임을 올릴 때 코어 · 게임 오버라이드 파일(또는 `--appendconfig`)이 있으면 설정 파일을 다시 읽으면서
+    `--port` 값을 retroarch.cfg 의 `netplay_ip_port` 로 덮는다 — 오버라이드를 저장해 둔 코어에서 방장은 55435 를 듣고 참가자는 55435 로 붙어 실패했다(476H 재현 → 고친 뒤 통과).
+- `lib_version` — call `lib_version`(arg = 코어 이름): 코어가 스스로 말하는 이름 · 버전(`retro_get_system_info`) `{"core","crc32","lib_name","lib_version"}`(hb11).
+  넷플레이 악수가 견주는 값이 이것이다(예 `v1.0.0.03 261110 GITa836e52`). `cores` 의 `core_version` 은 info 파일의 `display_version` 이라 실제 빌드와 다를 수 있다.
+  코어 .so 를 잠깐 실어(`dlopen`) 읽고 닫는다 — 파일 크기 · 시각이 같으면 다시 읽지 않는다. 읽기뿐이라 누구나 부른다.
 
 ### 읽기 — `content query`
 
