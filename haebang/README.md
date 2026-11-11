@@ -28,7 +28,7 @@
 고친 업스트림 파일은 스물이다(대부분 몇 줄).
 - `pkg/android/phoenix/build.gradle` — 맛 `haebang`
 - `input/drivers/android_input.c` — 동시 입력 · 나갈 때 롬저장 · 자동 상태저장 · 명령을 프레임 밖에서 처리 · 슬립에서 포커스를 늦게 잃으면 롬저장 다시
-- `save.c` — 나갈 때 쓴 롬저장을 자동 저장 스레드의 사본으로도 삼기(뒤로 간 동안 다시 쓰지 않게)
+- `save.c` — 나갈 때 쓴 롬저장을 자동 저장 스레드의 사본으로도 삼기(뒤로 간 동안 다시 쓰지 않게) · 롬저장 파일은 한 번에 한 쪽만 쓰기
 - `gfx/video_thread_wrapper.c` — 영상 스레드를 JVM 에 붙이기
 - `pkg/android/phoenix/src/com/retroarch/browser/mainmenu/MainMenuActivity.java` — 알림 허용 창 기다리기
 - `pkg/android/phoenix/src/com/retroarch/browser/retroactivity/RetroActivityFuture.java` — 화면 주사율 맞추기 · 기본 자료 풀기 · 상태저장 그림 켜기 · 다른 게임 / `ENTRYSLOT` 다시 띄우기 · `RELOADSAVES` 면 쓰지 않고 다시 띄우기 · 나갈 때 저장 동안 CPU 깨워 두기
@@ -440,6 +440,15 @@ B = Super Mario World, Y = 요시 아일랜드(SRAM 을 계속 바꿈). '바꿈'
   그 사이 몇 프레임이 돌아 SRAM 이 바뀌면, 그 몫을 스레드가 5~8초 뒤에 썼다(hb10 첫 빌드, 슬립 11번 중 6번).
   - 포커스를 잃을 때 이미 멈춤(`APP_CMD_STOP`) 뒤면 롬저장을 바로 한 번 더 쓴다. 로그 `[SRAM] HB: focus lost after the leave save - writing again.`
   - 고친 뒤 슬립 6번: 5번이 이 길을 탔고, 22초 동안 늦게 쓴 것은 없었다.
+- **한 번에 한 쪽만 쓰기**(`save.c`, 11/11 재검토) — 스레드는 사본을 뜬 뒤 잠금 밖에서 파일에 쓴다. 그 순간 나갈 때 쓰기가 같은 파일에 쓰면
+  스레드의 옛 사본이 나중에 써질 수 있었고, 위 고침 뒤로는 스레드가 다시 쓰지 않아 옛 내용이 남는다(몇 ms 의 틈 — 기기에서 재현하지는 못했다).
+  - 롬저장 파일 쓰기에 잠금 하나(`autosave_hb_io_lock`)를 두었다. 스레드는 그 잠금을 잡은 뒤, 사본을 뜬 뒤로 바깥에서 쓴 적이 있으면(`hb_gen`) 쓰지 않는다.
+  - 스레드는 이 잠금과 칸 잠금을 함께 쥐지 않는다(메인 스레드는 프레임 끝에서 칸 잠금을 쥔 채 이 잠금을 잡는다).
+
+**`QUITFOCUS` 로 켠 게임**(11/11 재검토) — `QUITFOCUS` 가 있으면 `onStop` 에서 `System.exit(0)` 로 끝난다. 나갈 때 저장은
+`onSaveInstanceState`(`onStop` 뒤)에서 하므로 건너뛰었다(hb10 확인: 홈에서 롬저장 · `.state.auto` 둘 다 안 씀).
+- **고침**(`RetroActivityFuture.onStop`) — 끝내기 전에 `hbNativeLeaveSave` 를 부른다. 요시 아일랜드 · N64(그림은 onPause 때 떠 둔 것) 통과.
+- 해방런처는 `QUITFOCUS` 를 넘기지 않는다. 넘기는 다른 프런트엔드를 위한 것이다.
 
 ## 상태저장 그림
 
