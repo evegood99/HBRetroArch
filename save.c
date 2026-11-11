@@ -78,10 +78,18 @@ struct autosave
    sthread_t *thread;
    size_t bufsize;
    unsigned interval;
+   unsigned hb_gen; /* HB: counts the writes made outside the thread */
    uint8_t flags;
 };
 
 static struct autosave_st autosave_state;
+
+/* HB: one writer at a time for the save RAM files - the autosave thread and
+ * the saves made outside it (the leave save, CMD_EVENT_SAVE_FILES). Without
+ * it the thread could be writing an older copy while the leave save writes
+ * the same file, and the older one could land last.
+ * Order: the thread never holds it together with a handle lock. */
+static slock_t *autosave_hb_io_lock = NULL;
 
 
 /**
@@ -97,13 +105,27 @@ static void autosave_thread(void *data)
    for (;;)
    {
       bool differ;
+      unsigned gen;
 
       slock_lock(save->lock);
       differ = memcmp(save->buffer, save->retro_buffer,
             save->bufsize) != 0;
       if (differ)
          memcpy(save->buffer, save->retro_buffer, save->bufsize);
+      gen    = save->hb_gen;
       slock_unlock(save->lock);
+
+      /* HB: one writer at a time; when the file was written outside the
+       * thread since the copy was taken, that one is newer - skip */
+      if (differ)
+      {
+         slock_lock(autosave_hb_io_lock);
+         if (save->hb_gen != gen)
+         {
+            differ = false;
+            slock_unlock(autosave_hb_io_lock);
+         }
+      }
 
       if (differ)
       {
@@ -124,6 +146,7 @@ static void autosave_thread(void *data)
             intfstream_close(file);
             free(file);
          }
+         slock_unlock(autosave_hb_io_lock);
       }
 
       slock_lock(save->cond_lock);
@@ -169,6 +192,7 @@ static autosave_t *autosave_new(const char *path,
       return NULL;
 
    handle->flags                 = 0;
+   handle->hb_gen                = 0;
    handle->bufsize               = len;
    handle->interval              = interval;
    if (compress)
@@ -224,6 +248,9 @@ bool autosave_init(bool compress_files, unsigned autosave_interval)
 
    if (autosave_interval < 1 || !task_save_files)
       return false;
+
+   if (!autosave_hb_io_lock)
+      autosave_hb_io_lock = slock_new();
 
    if (!(list = (autosave_t**)
       calloc(task_save_files->size,
@@ -305,11 +332,15 @@ static void autosave_hb_written(unsigned slot)
     * commands are handled when the frame ends (android_hb_core_run_end),
     * still inside - the thread is then waiting, not copying. */
    if (autosave_hb_locked)
+   {
       memcpy(handle->buffer, handle->retro_buffer, handle->bufsize);
+      handle->hb_gen++;
+   }
    else
    {
       slock_lock(handle->lock);
       memcpy(handle->buffer, handle->retro_buffer, handle->bufsize);
+      handle->hb_gen++;
       slock_unlock(handle->lock);
    }
 }
@@ -540,8 +571,17 @@ bool event_save_files(bool is_sram_used, bool compress_files,
 #endif
    if (!task_save_files || !is_sram_used)
       return false;
+#ifdef HAVE_THREADS
+   /* HB: not while the autosave thread writes the same files */
+   if (autosave_hb_io_lock)
+      slock_lock(autosave_hb_io_lock);
+#endif
    for (i = 0; i < task_save_files->size; i++)
       content_save_ram_file(i, compress_files);
+#ifdef HAVE_THREADS
+   if (autosave_hb_io_lock)
+      slock_unlock(autosave_hb_io_lock);
+#endif
    return true;
 }
 
