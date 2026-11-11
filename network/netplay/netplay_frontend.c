@@ -211,6 +211,22 @@ const mitm_server_t netplay_mitm_server_list[NETPLAY_MITM_SERVERS] = {
 
 static net_driver_state_t networking_driver_st = {0};
 
+/* HB: a room opened by HB Launcher (NETPLAY intent extra, see
+ * frontend/drivers/platform_unix.c). The host listens on 127.0.0.1 only -
+ * the launcher's tunnel dials it - and does not answer LAN discovery,
+ * announce to the lobby, open a port (UPnP) or use a relay server.
+ * The guest leaves the game when the connection to the host ends or
+ * cannot be made, so that the launcher comes back to the front. */
+bool hb_netplay_private     = false;
+static bool hb_netplay_quit = false;
+
+bool netplay_hb_take_quit(void)
+{
+   bool ret        = hb_netplay_quit;
+   hb_netplay_quit = false;
+   return ret;
+}
+
 net_driver_state_t *networking_state_get_ptr(void)
 {
    return &networking_driver_st;
@@ -6918,6 +6934,7 @@ static bool init_tcp_socket(netplay_t *netplay,
    struct addrinfo *addr = NULL;
    struct addrinfo hints = {0};
    bool is_mitm          = !server && mitm;
+   const char *node      = is_mitm ? mitm : server;
    int fd                = -1;
 
    if (!network_init())
@@ -6927,13 +6944,22 @@ static bool init_tcp_socket(netplay_t *netplay,
    {
       if (!is_mitm)
       {
-         hints.ai_flags  = AI_PASSIVE;
+         if (hb_netplay_private)
+         {
+            /* HB: host on this device only */
+            node            = "127.0.0.1";
+            hints.ai_family = AF_INET;
+         }
+         else
+         {
+            hints.ai_flags  = AI_PASSIVE;
 #ifdef HAVE_INET6
-         /* Default to hosting on IPv6 and IPv4 */
-         hints.ai_family = AF_INET6;
+            /* Default to hosting on IPv6 and IPv4 */
+            hints.ai_family = AF_INET6;
 #else
-         hints.ai_family = AF_INET;
+            hints.ai_family = AF_INET;
 #endif
+         }
       }
       else /* IPv4 only for relay servers. */
          hints.ai_family = AF_INET;
@@ -6943,7 +6969,7 @@ static bool init_tcp_socket(netplay_t *netplay,
    snprintf(port_buf, sizeof(port_buf), "%hu", (unsigned short)port);
    hints.ai_flags |= AI_NUMERICSERV;
 
-   if (getaddrinfo_retro(is_mitm ? mitm : server, port_buf,
+   if (getaddrinfo_retro(node, port_buf,
       &hints, &addr))
    {
       if (!server && !is_mitm)
@@ -6952,7 +6978,8 @@ static bool init_tcp_socket(netplay_t *netplay,
 try_ipv4:
          /* Didn't work with IPv6, try IPv4 */
          hints.ai_family = AF_INET;
-         if (getaddrinfo_retro(server, port_buf, &hints, &addr))
+         if (getaddrinfo_retro(hb_netplay_private ? node : server,
+                  port_buf, &hints, &addr))
 #endif
          {
             RARCH_ERR("[Netplay] Failed to set a hosting address.\n");
@@ -8896,11 +8923,16 @@ int16_t input_state_net(unsigned port, unsigned device,
 static void netplay_disconnect(netplay_t *netplay)
 {
    size_t i;
+   /* HB: the guest of a launcher room leaves the game (runloop.c) */
+   bool hb_guest = hb_netplay_private && !netplay->is_server;
 
    for (i = 0; i < netplay->connections_size; i++)
       netplay_hangup(netplay, &netplay->connections[i]);
 
    deinit_netplay();
+
+   if (hb_guest)
+      hb_netplay_quit = true;
 
 #ifdef HAVE_PRESENCE
    {
@@ -8944,7 +8976,7 @@ static bool netplay_pre_frame(netplay_t *netplay)
 /* Vita can't bind to our discovery port;
    do not try to answer discovery queries there. */
 #if defined(HAVE_NETPLAYDISCOVERY) && !defined(VITA)
-      if (!netplay->mitm_handler)
+      if (!netplay->mitm_handler && !hb_netplay_private)
       {
          net_driver_state_t *net_st = &networking_driver_st;
 
@@ -8955,6 +8987,7 @@ static bool netplay_pre_frame(netplay_t *netplay)
 #endif
 
       if (settings->bools.netplay_public_announce &&
+            !hb_netplay_private &&
             netplay->next_announce != -1)
       {
          if (cpu_features_get_time_usec() >= netplay->next_announce)
@@ -9125,7 +9158,7 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
 
       server = NULL;
 
-      if (settings->bools.netplay_use_mitm_server)
+      if (settings->bools.netplay_use_mitm_server && !hb_netplay_private)
       {
          const char *mitm_handle = settings->arrays.netplay_mitm_server;
 
@@ -9162,7 +9195,7 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
       server, mitm, port, mitm_session,
       settings->ints.netplay_check_frames,
       &cbs,
-      settings->bools.netplay_nat_traversal,
+      settings->bools.netplay_nat_traversal && !hb_netplay_private,
 #ifdef HAVE_DISCORD
       !string_is_empty(discord_get_own_username()) ? discord_get_own_username()
       :
@@ -9227,6 +9260,11 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
    return true;
 
 failure:
+   /* HB: the guest of a launcher room does not go on alone */
+   if (     hb_netplay_private
+         && (net_st->flags & NET_DRIVER_ST_FLAG_NETPLAY_IS_CLIENT))
+      hb_netplay_quit = true;
+
    net_st->flags &= ~(NET_DRIVER_ST_FLAG_NETPLAY_ENABLED
                     | NET_DRIVER_ST_FLAG_NETPLAY_IS_CLIENT
                     | NET_DRIVER_ST_FLAG_NETPLAY_CLIENT_DEFERRED);

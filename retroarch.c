@@ -7100,6 +7100,12 @@ static bool retroarch_parse_input_and_config(
 #endif
    global->flags                  &= ~GLOB_FLG_CLI_LOAD_MENU_ON_ERR;
 
+#if defined(ANDROID) && defined(HAVE_NETWORKING)
+   /* HB: the process lives on between games - a game after a netplay one
+    * starts without netplay unless its own arguments ask for it. */
+   netplay_driver_ctl(RARCH_NETPLAY_CTL_DISABLE, NULL);
+#endif
+
    /* Make sure we can call retroarch_parse_input several times ... */
    optind                          = 0;
    optstring                       = "hs:fvVS:A:U:DN:d:e:"

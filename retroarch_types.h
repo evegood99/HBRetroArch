@@ -247,6 +247,11 @@ struct rarch_main_wrap
    const char *config_path;
    const char *libretro_path;
    const char *entry_slot; /* HB: "0".."999" or "auto", passed on as -e */
+   /* HB: NETPLAY extras - "host" or "client", passed on as --host /
+    * --connect 127.0.0.1, with --port and --nick when given */
+   const char *netplay_mode;
+   const char *netplay_port;
+   const char *netplay_nick;
    int argc;
    uint8_t flags;
 };

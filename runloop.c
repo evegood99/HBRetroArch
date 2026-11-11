@@ -97,6 +97,11 @@
 
 #if defined(ANDROID)
 #include "play_feature_delivery/play_feature_delivery.h"
+#ifdef HAVE_NETWORKING
+/* HB: network/netplay/netplay_frontend.c */
+bool netplay_hb_take_quit(void);
+#endif
+
 /* HB: input/drivers/android_input.c */
 void android_hb_core_run_begin(void);
 void android_hb_core_run_end(void);
@@ -7259,6 +7264,13 @@ int runloop_iterate(void)
       if (!core_paused)
          runloop_st->frame_time.callback(delta);
    }
+
+#ifdef HAVE_NETWORKING
+   /* HB: guest of a launcher room - the host is gone (or was never
+    * reached), leave the game. Done here, outside the netplay code. */
+   if (netplay_hb_take_quit())
+      command_event(CMD_EVENT_QUIT, NULL);
+#endif
 
    /* Update audio buffer occupancy if buffer status
     * callback is in use by the core */

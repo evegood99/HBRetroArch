@@ -1386,6 +1386,31 @@ static void content_load_init_wrap(
       argv[(*argc)++] = strdup(args->entry_slot);
    }
 
+#ifdef HAVE_NETWORKING
+   /* HB: a room opened by HB Launcher. The guest connects to the
+    * launcher's tunnel entry on this device. */
+   if (args->netplay_mode)
+   {
+      if (string_is_equal(args->netplay_mode, "host"))
+         argv[(*argc)++] = strldup("--host", sizeof("--host"));
+      else
+      {
+         argv[(*argc)++] = strldup("--connect", sizeof("--connect"));
+         argv[(*argc)++] = strldup("127.0.0.1", sizeof("127.0.0.1"));
+      }
+      if (args->netplay_port)
+      {
+         argv[(*argc)++] = strldup("--port", sizeof("--port"));
+         argv[(*argc)++] = strdup(args->netplay_port);
+      }
+      if (args->netplay_nick)
+      {
+         argv[(*argc)++] = strldup("--nick", sizeof("--nick"));
+         argv[(*argc)++] = strdup(args->netplay_nick);
+      }
+   }
+#endif
+
    if (args->flags & RARCH_MAIN_WRAP_FLAG_VERBOSE)
       argv[(*argc)++] = strldup("-v", sizeof("-v"));
 }
@@ -1423,6 +1448,9 @@ static bool content_load(content_ctx_info_t *info,
    wrap_args->config_path    = NULL;
    wrap_args->libretro_path  = NULL;
    wrap_args->entry_slot     = NULL;
+   wrap_args->netplay_mode   = NULL;
+   wrap_args->netplay_port   = NULL;
+   wrap_args->netplay_nick   = NULL;
    wrap_args->flags          = 0;
    wrap_args->argc           = 0;
 

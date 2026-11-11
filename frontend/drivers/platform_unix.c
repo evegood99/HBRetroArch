@@ -621,6 +621,25 @@ static bool hb_entry_slot_valid(const char *s)
    return true;
 }
 
+#ifdef HAVE_NETWORKING
+/* HB: network/netplay/netplay_frontend.c - a room opened by HB Launcher */
+extern bool hb_netplay_private;
+
+/* HB: NETPLAYPORT value - 1024..65535 without leading zeros. */
+static bool hb_netplay_port_valid(const char *s)
+{
+   size_t i;
+   size_t _len = strlen(s);
+
+   if (_len < 4 || _len > 5 || s[0] == '0')
+      return false;
+   for (i = 0; i < _len; i++)
+      if (s[i] < '0' || s[i] > '9')
+         return false;
+   return atoi(s) >= 1024 && atoi(s) <= 65535;
+}
+#endif
+
 /* HB: AUTOSAVESTATE = "1" on the current intent. getIntent follows
  * setIntent, so a same-game request that only resumes counts too.
  * The main thread stays attached, so the local refs are deleted here. */
@@ -1492,7 +1511,13 @@ static void frontend_unix_get_env(int *argc,
       args->sram_path  = NULL;
       args->state_path = NULL;
       args->entry_slot = NULL;
+      args->netplay_mode = NULL;
+      args->netplay_port = NULL;
+      args->netplay_nick = NULL;
    }
+#ifdef HAVE_NETWORKING
+   hb_netplay_private = false;
+#endif
 
    frontend_android_get_version(&major, &minor, &rel);
 
@@ -1625,6 +1650,69 @@ static void frontend_unix_get_env(int *argc,
             args->entry_slot = entry_slot;
       }
    }
+
+#ifdef HAVE_NETWORKING
+   /* HB: NETPLAY = "host" | "client" - a room opened by HB Launcher
+    * (like --host / --connect 127.0.0.1). NETPLAYPORT is the port to
+    * listen on (host) or the launcher's tunnel entry (client), NETPLAYNICK
+    * the name shown to the other side. Anything else is ignored. */
+   CALL_OBJ_METHOD_PARAM(env, jstr, obj, android_app->getStringExtra,
+         (*env)->NewStringUTF(env, "NETPLAY"));
+
+   if (android_app->getStringExtra && jstr)
+   {
+      static char netplay_mode[8];
+      const char *argv = (*env)->GetStringUTFChars(env, jstr, 0);
+
+      *netplay_mode = '\0';
+
+      if (argv && (string_is_equal(argv, "host")
+               || string_is_equal(argv, "client")))
+         strlcpy(netplay_mode, argv, sizeof(netplay_mode));
+      else
+         __android_log_print(ANDROID_LOG_WARN,
+            "RetroArch", "[ENV] Ignoring netplay mode \"%s\".\n", argv ? argv : "");
+      (*env)->ReleaseStringUTFChars(env, jstr, argv);
+
+      if (*netplay_mode && args)
+      {
+         static char netplay_port[8];
+         static char netplay_nick[32];
+
+         *netplay_port = '\0';
+         *netplay_nick = '\0';
+
+         CALL_OBJ_METHOD_PARAM(env, jstr, obj, android_app->getStringExtra,
+               (*env)->NewStringUTF(env, "NETPLAYPORT"));
+         if (jstr)
+         {
+            argv = (*env)->GetStringUTFChars(env, jstr, 0);
+            if (argv && hb_netplay_port_valid(argv))
+               strlcpy(netplay_port, argv, sizeof(netplay_port));
+            (*env)->ReleaseStringUTFChars(env, jstr, argv);
+         }
+
+         CALL_OBJ_METHOD_PARAM(env, jstr, obj, android_app->getStringExtra,
+               (*env)->NewStringUTF(env, "NETPLAYNICK"));
+         if (jstr)
+         {
+            argv = (*env)->GetStringUTFChars(env, jstr, 0);
+            if (argv && *argv)
+               strlcpy(netplay_nick, argv, sizeof(netplay_nick));
+            (*env)->ReleaseStringUTFChars(env, jstr, argv);
+         }
+
+         __android_log_print(ANDROID_LOG_INFO,
+            "RetroArch", "[ENV] Netplay \"%s\", port \"%s\".\n",
+            netplay_mode, netplay_port);
+
+         hb_netplay_private = true;
+         args->netplay_mode = netplay_mode;
+         args->netplay_port = *netplay_port ? netplay_port : NULL;
+         args->netplay_nick = *netplay_nick ? netplay_nick : NULL;
+      }
+   }
+#endif
 
    /* Internal Storage */
    CALL_OBJ_METHOD_PARAM(env, jstr, obj, android_app->getStringExtra,
