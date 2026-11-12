@@ -625,6 +625,15 @@ static bool hb_entry_slot_valid(const char *s)
 #ifdef HAVE_NETWORKING
 /* HB: network/netplay/netplay_frontend.c - a room opened by HB Launcher */
 extern bool hb_netplay_private;
+extern int hb_netplay_latency;
+
+/* HB: NETPLAYLATENCY value - "0".."10", no sign, no leading zeros. */
+static bool hb_netplay_latency_valid(const char *s)
+{
+   if (s[0] >= '0' && s[0] <= '9' && !s[1])
+      return true;
+   return s[0] == '1' && s[1] == '0' && !s[2];
+}
 
 /* HB: NETPLAYPORT value - 1024..65535 without leading zeros. */
 static bool hb_netplay_port_valid(const char *s)
@@ -1573,6 +1582,7 @@ static void frontend_unix_get_env(int *argc,
    }
 #ifdef HAVE_NETWORKING
    hb_netplay_private = false;
+   hb_netplay_latency = -1;
 #endif
 
    frontend_android_get_version(&major, &minor, &rel);
@@ -1761,6 +1771,30 @@ static void frontend_unix_get_env(int *argc,
          __android_log_print(ANDROID_LOG_INFO,
             "RetroArch", "[ENV] Netplay \"%s\", port \"%s\".\n",
             netplay_mode, netplay_port);
+
+         /* HB: NETPLAYLATENCY = "0".."10" - input latency frames for this
+          * room, picked by the launcher from the ping to the guest. Host
+          * only (the guest gets the host's value in the handshake). */
+         CALL_OBJ_METHOD_PARAM(env, jstr, obj, android_app->getStringExtra,
+               (*env)->NewStringUTF(env, "NETPLAYLATENCY"));
+         if (jstr)
+         {
+            argv = (*env)->GetStringUTFChars(env, jstr, 0);
+            if (     argv
+                  && string_is_equal(netplay_mode, "host")
+                  && hb_netplay_latency_valid(argv))
+            {
+               hb_netplay_latency = atoi(argv);
+               __android_log_print(ANDROID_LOG_INFO,
+                  "RetroArch", "[ENV] Netplay latency \"%d\".\n",
+                  hb_netplay_latency);
+            }
+            else
+               __android_log_print(ANDROID_LOG_WARN,
+                  "RetroArch", "[ENV] Ignoring netplay latency \"%s\".\n",
+                  argv ? argv : "");
+            (*env)->ReleaseStringUTFChars(env, jstr, argv);
+         }
 
          hb_netplay_private = true;
          args->netplay_mode = netplay_mode;

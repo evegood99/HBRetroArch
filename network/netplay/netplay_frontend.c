@@ -220,6 +220,12 @@ static net_driver_state_t networking_driver_st = {0};
 bool hb_netplay_private     = false;
 static bool hb_netplay_quit = false;
 
+/* HB: NETPLAYLATENCY intent extra - the input latency frames the launcher
+ * picked for this room from the ping to the guest (host only, 0..10).
+ * -1 = not given: the setting is used. It is a session value: the setting
+ * (and so retroarch.cfg) stays as the user left it. */
+int hb_netplay_latency      = -1;
+
 bool netplay_hb_take_quit(void)
 {
    bool ret        = hb_netplay_quit;
@@ -7410,6 +7416,14 @@ static netplay_t *netplay_new(const char *server, const char *mitm,
       if (settings->bools.run_ahead_enabled)
          netplay->input_latency_frames_min -=
             settings->uints.run_ahead_frames;
+      /* HB: the launcher's value as it is - run-ahead frames are not
+       * taken off (run-ahead itself is off during netplay). */
+      if (hb_netplay_private && hb_netplay_latency >= 0)
+      {
+         netplay->input_latency_frames_min = hb_netplay_latency;
+         RARCH_LOG("[Netplay] HB input latency frames %d.\n",
+               hb_netplay_latency);
+      }
       netplay->input_latency_frames_max =
          netplay->input_latency_frames_min +
          settings->uints.netplay_input_latency_frames_range;
