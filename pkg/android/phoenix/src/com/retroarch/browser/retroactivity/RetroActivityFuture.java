@@ -62,6 +62,8 @@ public final class RetroActivityFuture extends RetroActivityCamera {
     BundleAssetsCheck.apply(this, getIntent().getStringExtra("CONFIGFILE"));
     // HB: 상태저장 그림을 설정 파일마다 한 번 켠다(해방런처 세이브 창)
     SavestateThumbDefault.apply(this, getIntent().getStringExtra("CONFIGFILE"));
+    // HB: SELECT + START 로 메뉴 · 패드가 있으면 화면 버튼 숨김을 설정 파일마다 한 번 기본으로(InputDefaults)
+    InputDefaults.apply(this, getIntent().getStringExtra("CONFIGFILE"));
     // HB: 바로 켤 때도 기본 폴더를 안다 — 빠진 DATADIR · SDCARD · EXTERNAL · APK 를 채우고, 빈 폴더로 만들어진 설정을 고친다(DefaultDirs)
     DefaultDirs.apply(this);
     super.onCreate(savedInstanceState);

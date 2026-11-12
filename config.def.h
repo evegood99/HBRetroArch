@@ -588,7 +588,13 @@
 
 /* Automatically disable overlays when a
  * controller is connected in port 1 */
+/* HB: on by default on Android - with a gamepad (a handheld's own
+ * pad counts) the on-screen buttons only cover the game */
+#if defined(ANDROID)
+#define DEFAULT_OVERLAY_HIDE_WHEN_GAMEPAD_CONNECTED true
+#else
 #define DEFAULT_OVERLAY_HIDE_WHEN_GAMEPAD_CONNECTED false
+#endif
 
 #define DEFAULT_OVERLAY_SHOW_MOUSE_CURSOR false
 
@@ -935,6 +941,9 @@
 #define DEFAULT_MENU_TOGGLE_GAMEPAD_COMBO INPUT_COMBO_L1_R1_START_SELECT
 #elif TARGET_OS_TV
 #define DEFAULT_MENU_TOGGLE_GAMEPAD_COMBO INPUT_COMBO_DOWN_Y_L_R
+#elif defined(ANDROID)
+/* HB: SELECT + START opens the menu - handhelds have no other way in */
+#define DEFAULT_MENU_TOGGLE_GAMEPAD_COMBO INPUT_COMBO_START_SELECT
 #else
 #define DEFAULT_MENU_TOGGLE_GAMEPAD_COMBO INPUT_COMBO_NONE
 #endif

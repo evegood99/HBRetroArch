@@ -99,6 +99,7 @@ python haebang\build.py
   - 다른 값(`abc` · `99` · `03`) · `client` 는 무시하고 설정대로. 다음 실행에 없으면 없는 것.
   - logcat(`RetroArch`): 받을 때 `[ENV] Netplay latency "N".`, 무시할 때 `[ENV] Ignoring netplay latency "…".`, 방을 열 때 `[Netplay] HB input latency frames N.`
 - `default_dirs` — 게임 화면을 바로 켜도 기본 폴더가 채워진다(hb13, 아래 '기본 폴더'). `saves` 답의 `default` 는 `RetroArch/saves` · `states`
+- `input_defaults` — SELECT + START 로 메뉴 · 패드가 있으면 화면 버튼 숨김이 기본(hb14, 아래 '입력 기본값')
 - `lib_version` — call `lib_version`(arg = 코어 이름): 코어가 스스로 말하는 이름 · 버전(`retro_get_system_info`) `{"core","crc32","lib_name","lib_version"}`(hb11).
   넷플레이 악수가 견주는 값이 이것이다(예 `v1.0.0.03 261110 GITa836e52`). `cores` 의 `core_version` 은 info 파일의 `display_version` 이라 실제 빌드와 다를 수 있다.
   코어 .so 를 잠깐 실어(`dlopen`) 읽고 닫는다 — 파일 크기 · 시각이 같으면 다시 읽지 않는다. 읽기뿐이라 누구나 부른다.
@@ -387,6 +388,24 @@ adb shell logcat -s HBRefresh   # 고른 모드
   `config had no default folders (assets_directory empty); saves in content dir true, states true, config dir kept true; cleared: …`
 - 확인(레트로이드 포켓 노바, 2026-11-13): 깨진 설정 → 한 번 켜면 메뉴 한글 · 아이콘 정상, 세이브 경로는 `ROMs/megadrive/PicoDrive/…srm` 그대로,
   새 설정으로 바로 켜면 `RetroArch/saves/PicoDrive/…srm`.
+
+## 입력 기본값 (hb14)
+
+깔면 누구나 먼저 하는 설정 둘을 기본으로 둔다(사용자 요청 2026-11-13).
+
+| 설정 | 원본 기본 | HB(hb14~) |
+|---|---|---|
+| 메뉴 열기 패드 조합 `input_menu_toggle_gamepad_combo` | `0`(없음) | `4`(SELECT + START) |
+| 패드가 연결되면 화면 버튼 숨김 `input_overlay_hide_when_gamepad_connected` | `false` | `true` |
+
+- 새 설정 파일은 기본값(`config.def.h`, 안드로이드만)으로 그렇게 만들어진다.
+- 이미 있는 설정 파일은 옛 값이 적혀 있어 기본값만으로는 안 바뀐다 → `InputDefaults`(`RetroActivityFuture.onCreate`, 설정을 읽기 전)가
+  **설정 파일마다 한 번만** 고친다. 했다는 표시는 SharedPreferences(`haebang` · `hb_input_default_v1:<경로>`)라, 그 뒤 메뉴에서 바꾸면 그대로 둔다.
+- **메뉴 열기는 사용자가 정해 둔 것이 있으면 건드리지 않는다** — 패드 조합이 없음(0)이 아니거나,
+  메뉴 열기 단축키(`input_menu_toggle_btn` · `_axis` · `_mbtn`)에 무언가 묶여 있을 때. 키보드 키(`input_menu_toggle`, 기본 f1)는 보지 않는다.
+- 화면 버튼 숨김은 꺼져 있으면 한 번 켠다(끈 것이 기본값인지 사용자가 고른 것인지 가릴 수 없다). 다시 끄면 그대로다.
+  기기에 달린 패드(RG 476H · 레트로이드 포켓)도 '연결된 패드'라 그런 기기에서는 화면 버튼이 안 보인다. 패드가 없는 폰은 그대로 보인다.
+- logcat 태그 `HBInputDefaults`: `Set once: menu = SELECT + START overlay hidden with a gamepad (<경로>)`
 
 ## 슬립 · 홈에서 돌아올 때 (스레드된 비디오)
 
