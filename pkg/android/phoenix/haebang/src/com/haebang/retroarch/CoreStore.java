@@ -45,8 +45,8 @@ final class CoreStore
    static final String TAG = "HBCoreBridge";
    /** 2(hb8): saves 조회 · cores 의 corename · savestate 칸 · info 의 caps */
    static final int API_VERSION = 2;
-   /** 이 버전이 하는 일 — 런처는 이 글자로 기능을 확인한다(옛 버전에는 칸이 없다). autosave_leave 는 hb9, reload_saves 는 hb10, netplay · lib_version 은 hb11, netplay_latency 는 hb12. */
-   static final String CAPS = "entry_slot,saves,thumb_default,autosave_leave,reload_saves,netplay,lib_version,netplay_latency";
+   /** 이 버전이 하는 일 — 런처는 이 글자로 기능을 확인한다(옛 버전에는 칸이 없다). autosave_leave 는 hb9, reload_saves 는 hb10, netplay · lib_version 은 hb11, netplay_latency 는 hb12, default_dirs 는 hb13. */
+   static final String CAPS = "entry_slot,saves,thumb_default,autosave_leave,reload_saves,netplay,lib_version,netplay_latency,default_dirs";
    static final String SUFFIX = "_libretro_android.so";
    /** 플랫폼 꼬리가 없는 이름 — buildbot 에 이렇게 올라온 코어(Azahar)를 앱 안 온라인 업데이터가 받으면 이 이름으로 둔다. */
    static final String PLAIN_SUFFIX = "_libretro.so";
@@ -213,6 +213,16 @@ final class CoreStore
          return shared.getAbsolutePath();
       File ext = app.getExternalFilesDir(null);
       return ext != null ? new File(ext, "system").getAbsolutePath() : "";
+   }
+
+   /** RetroArch 기본 폴더(platform_unix.c) — <내부>/RetroArch/<name>, 내부 저장소에 못 쓰면 앱 외부 폴더. */
+   String defaultDir(String name)
+   {
+      File storage = Environment.getExternalStorageDirectory();
+      if (storage != null && storage.canWrite())
+         return new File(storage, "RetroArch/" + name).getAbsolutePath();
+      File ext = app.getExternalFilesDir(null);
+      return ext != null ? new File(ext, name).getAbsolutePath() : "";
    }
 
    private String readConfigValue(String key)

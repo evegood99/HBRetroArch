@@ -17,8 +17,9 @@ import java.util.Map;
  *
  * RetroArch 가 정하는 규칙을 그대로 옮겼다(그대로여야 런처가 그림 · 파일을 제자리에서 찾는다).
  * - 폴더 값: configuration.c 의 savefile_directory · savestate_directory 읽기 — '~' · ':' 를 펴고, 폴더가 아니면 버린다.
- *   'default' · 빈 값 · 버린 값은 기본 폴더인데, 프런트엔드가 DATADIR 없이 게임 화면을 바로 켜면 기본 폴더가 비어
- *   **롬 폴더**가 된다(기기에서 확인 — 앱 아이콘으로 켜면 <내부>/RetroArch/saves).
+ *   'default' · 빈 값 · 버린 값은 기본 폴더(<내부>/RetroArch/saves · states) — hb13 부터 게임 화면을 바로 켜도 그렇다(DefaultDirs).
+ *   hb12 까지는 프런트엔드가 DATADIR 없이 바로 켜면 기본 폴더가 비어 **롬 폴더**였다. 그렇게 만들어진 설정은
+ *   hb13 이 savefiles_in_content_dir · savestates_in_content_dir 를 켜서 롬 폴더를 지킨다.
  * - 이름 · 하위 폴더: runloop.c 의 runloop_path_set_basename · runloop_path_set_redirect.
  * - library_name 은 코어가 실행 때 알려 주는 이름이다. 코어를 올리지 않으므로 info 의 corename 을 쓰고,
  *   그 폴더가 없을 때 이름을 정규화(소문자 영숫자)해 같은 폴더가 있으면 그것을 쓴다.
@@ -37,8 +38,12 @@ final class SaveDirs
 
       String saveRaw = cfg.get("savefile_directory");
       String stateRaw = cfg.get("savestate_directory");
-      String saveRoot = root(saveRaw);
-      String stateRoot = root(stateRaw);
+      // hb13: 기본 폴더가 늘 채워진다(DefaultDirs). 'default' · 빈 값은 <내부>/RetroArch/saves · states.
+      // 다만 기본 폴더 없이 만들어진 설정(assets_directory 가 빈 값)은 아직 안 고쳐진 것 — 다음 실행이 '콘텐츠 폴더에 저장' 을 켠다 → 롬 폴더.
+      String assetsRaw = cfg.get("assets_directory");
+      boolean noDefaults = assetsRaw != null && (assetsRaw.isEmpty() || "default".equals(assetsRaw));
+      String saveRoot = root(saveRaw, noDefaults ? "" : st.defaultDir("saves"));
+      String stateRoot = root(stateRaw, noDefaults ? "" : st.defaultDir("states"));
       boolean sortSaves = bool(cfg, "sort_savefiles_enable", true);
       boolean sortStates = bool(cfg, "sort_savestates_enable", true);
       boolean sortSavesByContent = bool(cfg, "sort_savefiles_by_content_enable", false);
@@ -122,13 +127,13 @@ final class SaveDirs
 
    // ---------------------------------------------------------------- 폴더 값
 
-   /** configuration.c: 'default' · 빈 값 · 폴더가 아닌 값이면 기본(빈 값 = 롬 폴더), 아니면 편 경로. */
-   private static String root(String raw)
+   /** configuration.c: 'default' · 빈 값 · 폴더가 아닌 값이면 기본 폴더(def — 빈 값이면 롬 폴더), 아니면 편 경로. */
+   private static String root(String raw, String def)
    {
       if (raw == null || raw.isEmpty() || "default".equals(raw))
-         return "";
+         return def;
       String p = expandSpecial(raw);
-      return new File(p).isDirectory() ? p : "";
+      return new File(p).isDirectory() ? p : def;
    }
 
    /** fill_pathname_expand_special: '~' 는 HOME, ':' 는 실행 파일 폴더 — 둘 다 그 뒤 두 글자째부터 붙인다. */

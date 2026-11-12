@@ -98,6 +98,7 @@ python haebang\build.py
     런어헤드 프레임을 빼지 않고 준 값 그대로, 최댓값은 `준 값 + netplay_input_latency_frames_range`(기본 0 → 고정).
   - 다른 값(`abc` · `99` · `03`) · `client` 는 무시하고 설정대로. 다음 실행에 없으면 없는 것.
   - logcat(`RetroArch`): 받을 때 `[ENV] Netplay latency "N".`, 무시할 때 `[ENV] Ignoring netplay latency "…".`, 방을 열 때 `[Netplay] HB input latency frames N.`
+- `default_dirs` — 게임 화면을 바로 켜도 기본 폴더가 채워진다(hb13, 아래 '기본 폴더'). `saves` 답의 `default` 는 `RetroArch/saves` · `states`
 - `lib_version` — call `lib_version`(arg = 코어 이름): 코어가 스스로 말하는 이름 · 버전(`retro_get_system_info`) `{"core","crc32","lib_name","lib_version"}`(hb11).
   넷플레이 악수가 견주는 값이 이것이다(예 `v1.0.0.03 261110 GITa836e52`). `cores` 의 `core_version` 은 info 파일의 `display_version` 이라 실제 빌드와 다를 수 있다.
   코어 .so 를 잠깐 실어(`dlopen`) 읽고 닫는다 — 파일 크기 · 시각이 같으면 다시 읽지 않는다. 읽기뿐이라 누구나 부른다.
@@ -356,6 +357,36 @@ adb shell logcat -s HBRefresh   # 고른 모드
 - 이 APK 버전으로 아직 안 풀었으면 `current` · APK 경로 · 푸는 자리를 적는다(첫 화면이 하던 일). 이미 준비돼 있으면 건드리지 않는다.
 - 버전은 같은데 `<dataDir>/assets` 가 없거나 `<dataDir>/info` 가 비었으면 `last` 를 0 으로 되돌려 다시 풀게 한다.
 - `bundle_assets_extract_enable = false` 는 따른다. logcat 태그는 `HBAssets`.
+
+## 기본 폴더 (바로 켤 때)
+
+**증상**: 새로 설치한 뒤 메뉴의 한글이 '??' 로 나오고 아이콘이 빈칸(레트로이드 포켓 노바 · hb12, 2026-11-13). 자료는 풀려 있었다(`info` 정상, `last == current`).
+
+**원인**
+- RetroArch 는 기본 폴더(`<dataDir>/assets` · `info` · `cores`, `RetroArch/saves` · `system` · `playlists` …)를 인텐트 추가값
+  `DATADIR` · `SDCARD` · `EXTERNAL` · `APK` 로 정한다(`platform_unix.c`). 이 값은 **아이콘으로 켤 때의 첫 화면**(`MainMenuActivity`)만 넣는다.
+- 해방런처 · ES-DE 처럼 `RetroActivityFuture` 를 바로 켜면 기본 폴더가 전부 빈 값이다. 새로 설치하고 처음을 그렇게 켜면 설정 파일이
+  `assets_directory = "default"`(= 빈 값) · `libretro_info_path = ""` … 로 만들어진다.
+- 그 뒤로는 아이콘으로 켜도 그대로다 — 설정 파일의 `"default"` 는 읽을 때 빈 값이 되고 다시 채워지지 않는다.
+  자료 폴더를 몰라 글꼴 · 아이콘을 못 읽고, 세이브는 롬 옆에, 코어별 설정 폴더는 설정 파일 옆(`files/PicoDrive`)에 생긴다.
+- 설정 파일이 예전에 아이콘으로 처음 만들어진 기기(RG 476H)는 폴더가 온전히 적혀 있어 드러나지 않았다.
+
+**고침**(hb13, `DefaultDirs` — `RetroActivityFuture.onCreate`, RetroArch 가 인텐트 · 설정을 읽기 전)
+- 빠진 추가값(`CONFIGFILE` · `DATADIR` · `APK` · `SDCARD` · `EXTERNAL` · `IME`)을 첫 화면이 넣는 값으로 채운다. 준 값은 그대로 둔다.
+- 이미 그렇게 만들어진 설정 파일이면(`assets_directory` 가 `"default"` 나 빈 값) 값이 빈 폴더 칸(`…_directory` · `…_dir` · `…_path`)을 지운다 —
+  RetroArch 가 기본 폴더로 채워 다음 저장 때 온전한 경로로 적는다.
+- **쓰던 자리는 지킨다.** 그 설정으로 쓴 세이브 · 상태저장은 롬 옆(`<롬 폴더>/<코어>/`)에, 코어 옵션 · 오버라이드는 설정 파일 옆(`files/<코어>/`)에 있다.
+  기본 폴더가 채워지면 빈 값이 `RetroArch/saves` · `states` · `config` 가 되어 그것들을 못 찾으므로:
+  - 세이브 · 상태저장 폴더 칸이 빈 값이면 `savefiles_in_content_dir` · `savestates_in_content_dir` 를 켠다(롬 옆 그대로 — 476H · 노바 로그로 같은 경로 확인).
+  - 설정 파일 옆에 코어 폴더가 있으면 `rgui_config_directory` 를 그 폴더로 적는다(없으면 지워서 `RetroArch/config`).
+  - BIOS 폴더(`system_directory`)는 지운다 → `RetroArch/system`(공급자 `info.system_dir` · 해방툴이 BIOS 를 넣는 자리와 같아진다. 전에는 롬 폴더에서 찾았다).
+- 새로 설치해 처음부터 hb13 으로 켠 기기는 세이브도 `RetroArch/saves` · `states` 다.
+- 공급자 `saves` 답도 같이 바꿨다(`SaveDirs`): 폴더 칸이 `default` · 빈 값이면 `RetroArch/saves` · `states`(hb12 까지는 롬 폴더라고 답했다).
+  아직 안 고쳐진 설정(`assets_directory` 빈 값)과 고쳐진 설정(`…_in_content_dir` 켜짐)은 롬 폴더라고 답한다. `caps` 에 `default_dirs`.
+- logcat 태그 `HBDefaults`: `filled intent extras: DATADIR APK SDCARD EXTERNAL IME` ·
+  `config had no default folders (assets_directory empty); saves in content dir true, states true, config dir kept true; cleared: …`
+- 확인(레트로이드 포켓 노바, 2026-11-13): 깨진 설정 → 한 번 켜면 메뉴 한글 · 아이콘 정상, 세이브 경로는 `ROMs/megadrive/PicoDrive/…srm` 그대로,
+  새 설정으로 바로 켜면 `RetroArch/saves/PicoDrive/…srm`.
 
 ## 슬립 · 홈에서 돌아올 때 (스레드된 비디오)
 
