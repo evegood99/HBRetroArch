@@ -1,6 +1,8 @@
 package com.retroarch.browser.retroactivity;
 
 import android.util.Log;
+import android.view.InputDevice;
+import android.view.KeyEvent;
 import android.view.PointerIcon;
 import android.view.View;
 import android.view.WindowManager;
@@ -119,6 +121,42 @@ public final class RetroActivityFuture extends RetroActivityCamera {
 
   /** HB: 네이티브(platform_unix.c 가 RegisterNatives 로 붙임) — 메인 스레드가 나갈 때처럼 저장하고 끝나면(최대 5초) 돌아온다. */
   private native void hbNativeLeaveSave();
+
+  // HB: 진짜 패드가 붙어 있나 — 기기에 달린 패드 · 붙여 둔 패드(아직 아무것도 안 눌렀어도).
+  // 네이티브(platform_unix.c android_hb_gamepad_present)가 '패드가 있으면 화면 버튼 숨김' 에 쓴다.
+  // 기기 목록이 바뀔 때만 다시 센다. 패드 = 게임패드 소스 + A · B 버튼(지문 센서 · 리모컨 · 가상 기기는 아니다).
+  private int[] hbPadIds = null;
+  private boolean hbPadPresent = false;
+
+  public boolean hbGamepadPresent() {
+    try {
+      int[] ids = InputDevice.getDeviceIds();
+      if (hbPadIds != null && java.util.Arrays.equals(ids, hbPadIds))
+        return hbPadPresent;
+      boolean present = false;
+      String name = "";
+      for (int id : ids) {
+        InputDevice d = InputDevice.getDevice(id);
+        if (d == null || d.isVirtual())
+          continue;
+        if ((d.getSources() & InputDevice.SOURCE_GAMEPAD) != InputDevice.SOURCE_GAMEPAD)
+          continue;
+        boolean[] has = d.hasKeys(KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_BUTTON_B);
+        if (has != null && has.length == 2 && has[0] && has[1]) {
+          present = true;
+          name = d.getName();
+          break;
+        }
+      }
+      if (hbPadIds == null || present != hbPadPresent)
+        Log.i("HBInputDefaults", "gamepad present: " + present + (present ? " (" + name + ")" : ""));
+      hbPadIds = ids;
+      hbPadPresent = present;
+      return present;
+    } catch (Exception e) {
+      return false;
+    }
+  }
 
   private void leaveSave() {
     try {

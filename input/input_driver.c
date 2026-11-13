@@ -5348,6 +5348,11 @@ void input_overlay_set_visibility(int overlay_idx,
       ol->iface->set_alpha(ol->iface_data, overlay_idx, 0.0);
 }
 
+#if defined(ANDROID)
+/* HB: frontend/drivers/platform_unix.c */
+extern bool android_hb_gamepad_present(void);
+#endif
+
 static bool input_overlay_want_hidden(void)
 {
    settings_t *settings = config_get_ptr();
@@ -5359,6 +5364,13 @@ static bool input_overlay_want_hidden(void)
 #endif
    if (settings->bools.input_overlay_hide_when_gamepad_connected)
       hide = hide || (input_config_get_device_name(0) != NULL);
+#if defined(ANDROID)
+   /* HB: a pad that has not sent anything yet counts too (a handheld's
+    * own pad) - the driver registers a pad only at its first event */
+   if (     !hide
+         && settings->bools.input_overlay_hide_when_gamepad_connected)
+      hide = android_hb_gamepad_present();
+#endif
 
    return hide;
 }

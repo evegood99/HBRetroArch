@@ -172,6 +172,7 @@ struct android_app
    jmethodID doHapticFeedback;
 
    jmethodID isPlayStoreBuild;
+   jmethodID hbGamepadPresent;   /* HB */
    jmethodID getAvailableCores;
    jmethodID getInstalledCores;
    jmethodID downloadCore;

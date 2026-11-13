@@ -407,6 +407,14 @@ adb shell logcat -s HBRefresh   # 고른 모드
   기기에 달린 패드(RG 476H · 레트로이드 포켓)도 '연결된 패드'라 그런 기기에서는 화면 버튼이 안 보인다. 패드가 없는 폰은 그대로 보인다.
 - logcat 태그 `HBInputDefaults`: `Set once: menu = SELECT + START overlay hidden with a gamepad (<경로>)`
 
+**패드가 '연결돼 있다'의 뜻(hb15)**
+- 원본 안드로이드 입력 드라이버는 패드를 **그 패드의 첫 입력이 올 때** 등록한다(`android_input.c` 의 `handle_hotplug`). 그래서 '패드가 연결되면 숨김' 을 켜도
+  기기에 달린 패드(RG 476H · 레트로이드 포켓)는 게임을 켤 때마다 버튼을 한 번 누르기 전까지 화면 버튼이 보였다.
+- hb15: 안드로이드가 아는 기기 목록에 진짜 패드가 있으면(게임패드 소스 + A · B 버튼, 가상 기기 제외) 처음부터 숨긴다
+  (`RetroActivityFuture.hbGamepadPresent` ← `platform_unix.c android_hb_gamepad_present`, 1초에 한 번 · 기기 목록이 바뀔 때만 다시 셈).
+  패드를 붙이고 떼면 따라간다. 터치 화면 · 음량 키 · 지문 센서 · 리모컨은 패드로 치지 않는다.
+- logcat `HBInputDefaults: gamepad present: true (<기기 이름>)`
+
 ## 슬립 · 홈에서 돌아올 때 (스레드된 비디오)
 
 **증상**: '스레드된 비디오'(`video_threaded = true`)를 켜 두면, 게임 중 슬립했다 깨우거나 홈에 나갔다 돌아오는 순간 RetroArch 가 죽는다

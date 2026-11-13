@@ -650,6 +650,33 @@ static bool hb_netplay_port_valid(const char *s)
 }
 #endif
 
+/* HB: a real gamepad is attached - a handheld's own pad or a paired one,
+ * even before it has sent anything. The input driver only learns about a
+ * pad from its first event, so 'hide the overlay when a gamepad is
+ * connected' kept the on-screen buttons until a button was pressed.
+ * Java is asked at most once a second (it answers from a cached list). */
+bool android_hb_gamepad_present(void)
+{
+   static retro_time_t next        = 0;
+   static bool present             = false;
+   struct android_app *android_app = g_android;
+   retro_time_t now                = cpu_features_get_time_usec();
+
+   if (now >= next)
+   {
+      JNIEnv *env = jni_thread_getenv();
+      next        = now + 1000000;
+      if (env && android_app && android_app->hbGamepadPresent)
+      {
+         jboolean r = JNI_FALSE;
+         CALL_BOOLEAN_METHOD(env, r, android_app->activity->clazz,
+               android_app->hbGamepadPresent);
+         present = r ? true : false;
+      }
+   }
+   return present;
+}
+
 /* HB: AUTOSAVESTATE = "1" on the current intent. getIntent follows
  * setIntent, so a same-game request that only resumes counts too.
  * The main thread stays attached, so the local refs are deleted here. */
@@ -2470,6 +2497,9 @@ static void frontend_unix_init(void *data)
          "getUserLanguageString", "()Ljava/lang/String;");
    GET_METHOD_ID(env, android_app->isPlayStoreBuild, class,
          "isPlayStoreBuild", "()Z");
+   /* HB: RetroActivityFuture.hbGamepadPresent() */
+   GET_METHOD_ID(env, android_app->hbGamepadPresent, class,
+         "hbGamepadPresent", "()Z");
    GET_METHOD_ID(env, android_app->getAvailableCores, class,
          "getAvailableCores", "()[Ljava/lang/String;");
    GET_METHOD_ID(env, android_app->getInstalledCores, class,
