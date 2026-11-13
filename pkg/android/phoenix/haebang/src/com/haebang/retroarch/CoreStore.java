@@ -45,8 +45,14 @@ final class CoreStore
    static final String TAG = "HBCoreBridge";
    /** 2(hb8): saves 조회 · cores 의 corename · savestate 칸 · info 의 caps */
    static final int API_VERSION = 2;
-   /** 이 버전이 하는 일 — 런처는 이 글자로 기능을 확인한다(옛 버전에는 칸이 없다). autosave_leave 는 hb9, reload_saves 는 hb10, netplay · lib_version 은 hb11, netplay_latency 는 hb12, default_dirs 는 hb13, input_defaults 는 hb14. */
-   static final String CAPS = "entry_slot,saves,thumb_default,autosave_leave,reload_saves,netplay,lib_version,netplay_latency,default_dirs,input_defaults";
+   /** 이 버전이 하는 일 — 런처는 이 글자로 기능을 확인한다(옛 버전에는 칸이 없다). autosave_leave 는 hb9, reload_saves 는 hb10, netplay · lib_version 은 hb11, netplay_latency 는 hb12, default_dirs 는 hb13, input_defaults 는 hb14, netplay_slot 은 hb16. */
+   static final String CAPS = "entry_slot,saves,thumb_default,autosave_leave,reload_saves,netplay,lib_version,netplay_latency,default_dirs,input_defaults,netplay_slot";
+   /**
+    * 넷플레이용 코어 자리(hb16) — 두 기기의 코어 버전이 다를 때 그 판에만 쓸 최신 빌드를 사용자의 코어와 따로 둔다.
+    * 자리 이름 "" 은 본 코어 폴더(cores), "netplay" 는 <앱 데이터>/cores_netplay.
+    */
+   static final String SLOT_NETPLAY = "netplay";
+   private static final long SLOT_KEEP_MS = 14L * 24 * 3600 * 1000;
    static final String SUFFIX = "_libretro_android.so";
    /** 플랫폼 꼬리가 없는 이름 — buildbot 에 이렇게 올라온 코어(Azahar)를 앱 안 온라인 업데이터가 받으면 이 이름으로 둔다. */
    static final String PLAIN_SUFFIX = "_libretro.so";
@@ -92,6 +98,8 @@ final class CoreStore
       String crc32 = "";
       long created;
       long finished;
+      /** "" = 본 코어, "netplay" = 넷플레이용 자리 */
+      String slot = "";
       boolean force;
       volatile boolean cancel;
 
@@ -101,6 +109,7 @@ final class CoreStore
          o.put("id", id);
          o.put("core", core);
          o.put("source", source);
+         o.put("slot", slot);
          o.put("state", state);
          o.put("progress", progress);
          o.put("bytes", bytes);
@@ -119,6 +128,7 @@ final class CoreStore
          j.id = o.optInt("id");
          j.core = o.optString("core");
          j.source = o.optString("source");
+         j.slot = o.optString("slot");
          j.state = o.optString("state");
          j.progress = o.optInt("progress");
          j.bytes = o.optLong("bytes");
@@ -174,6 +184,30 @@ final class CoreStore
       if (!d.isDirectory())
          d.mkdirs();
       return d;
+   }
+
+   /** 자리 이름을 다듬는다 — 없으면 ""(본 코어). 모르는 자리는 거절. */
+   static String slotName(String s)
+   {
+      if (s == null || s.trim().length() == 0)
+         return "";
+      if (SLOT_NETPLAY.equals(s.trim()))
+         return SLOT_NETPLAY;
+      throw new IllegalArgumentException("unknown slot: " + s + " (netplay)");
+   }
+
+   /** 넷플레이용 코어 자리 — 코어 폴더 옆. RetroArch 는 제 앱 폴더 안의 .so 만 올릴 수 있다. */
+   File netplayDir()
+   {
+      File d = new File(app.getApplicationInfo().dataDir, "cores_netplay");
+      if (!d.isDirectory())
+         d.mkdirs();
+      return d;
+   }
+
+   File slotDir(String slot)
+   {
+      return SLOT_NETPLAY.equals(slot) ? netplayDir() : coresDir();
    }
 
    File infoDir()
@@ -309,6 +343,15 @@ final class CoreStore
       return plain.isFile() ? plain : null;
    }
 
+   /** 그 자리의 그 코어 — 넷플레이 자리의 이름은 본 코어의 규약 이름과 같다(RetroArch 가 info 를 파일 이름으로 찾는다). 없으면 null. */
+   File slotFile(String slot, String id)
+   {
+      if (!SLOT_NETPLAY.equals(slot))
+         return installedFile(id);
+      File f = new File(netplayDir(), id + SUFFIX);
+      return f.isFile() ? f : null;
+   }
+
    // ---------------------------------------------------------------- 깔린 코어
 
    static final class Installed
@@ -323,8 +366,13 @@ final class CoreStore
 
    List<Installed> listInstalled(boolean withCrc)
    {
+      return listInstalled("", withCrc);
+   }
+
+   List<Installed> listInstalled(String slot, boolean withCrc)
+   {
       List<Installed> out = new ArrayList<>();
-      File[] files = coresDir().listFiles();
+      File[] files = slotDir(slot).listFiles();
       if (files == null)
          return out;
       // 코어마다 파일 하나 — '_libretro_android.so' 와 '_libretro.so' 가 둘 다 있으면 규약 이름 쪽.
@@ -589,7 +637,7 @@ final class CoreStore
       // 같은 코어가 이미 대기 · 받는 중이면 새로 만들지 않고 그 일을 돌려준다.
       for (Job j : jobs.values())
       {
-         if (j.core.equals(core) && j.active())
+         if (j.core.equals(core) && j.slot.length() == 0 && j.active())
             return j;
       }
       Job j = newJob(core, "buildbot");
@@ -605,6 +653,23 @@ final class CoreStore
          j.crc32 = crc32(have);
          j.finished = System.currentTimeMillis();
       }
+      saveJobs();
+      return j;
+   }
+
+   /**
+    * 넷플레이 자리에 그 코어의 최신 빌드를 두는 일 — 최신인지는 일꾼이 buildbot 목록을 지금 받아서 정한다(runSlot).
+    * 그래서 부른 쪽에는 늘 대기 중인 일이 돌아간다(이미 최신이면 곧 done · already_installed).
+    */
+   synchronized Job enqueueSlot(String core, String slot)
+   {
+      for (Job j : jobs.values())
+      {
+         if (j.core.equals(core) && j.slot.equals(slot) && j.active())
+            return j;
+      }
+      Job j = newJob(core, "buildbot");
+      j.slot = slot;
       saveJobs();
       return j;
    }
@@ -680,6 +745,11 @@ final class CoreStore
    /** 서비스의 일꾼 스레드에서 부른다 — buildbot 에서 zip 을 받아 풀어 코어 폴더에 넣는다. */
    void run(Job j, Listener listener)
    {
+      if (j.slot.length() > 0)
+      {
+         runSlot(j, listener);
+         return;
+      }
       File zip = new File(app.getCacheDir(), "hb_dl_" + j.id + ".zip");
       try
       {
@@ -708,6 +778,171 @@ final class CoreStore
          zip.delete();
          listener.onProgress(j);
       }
+   }
+
+   /**
+    * 넷플레이 자리의 코어를 buildbot 의 지금 빌드와 같게 맞춘다. 사용자의 코어(cores)는 건드리지 않는다.
+    *  1. 목록을 지금 받는다 — 못 받으면 실패(무엇이 최신인지 모르면 두 기기를 맞출 수 없다).
+    *  2. 자리의 파일이 그 빌드면 그대로(already_installed).
+    *  3. 본 코어가 그 빌드면 받지 않고 자리에서 본 코어를 가리킨다(링크, 안 되면 복사) — MAME 은 수백 MB 다.
+    *  4. 아니면 받아서 자리에 넣는다.
+    */
+   private void runSlot(Job j, Listener listener)
+   {
+      File zip = new File(app.getCacheDir(), "hb_dl_" + j.id + ".zip");
+      try
+      {
+         File dir = slotDir(j.slot);
+         touchSlot(dir, j.core);
+         pruneSlot(dir, j.core);
+         try
+         {
+            index(true);
+         }
+         catch (IOException e)
+         {
+            throw new IOException("buildbot index: " + e.getMessage());
+         }
+         IndexEntry want = indexEntry(j.core);
+         if (want == null)
+            throw new IOException("not on buildbot for " + abi());
+         File dest = new File(dir, j.core + SUFFIX);
+         if (dest.isFile() && abiOk(dest) && crc32(dest).equals(want.crc32))
+         {
+            j.note = "already_installed";
+         }
+         else
+         {
+            File mine = installedFile(j.core);
+            if (mine != null && abiOk(mine) && crc32(mine).equals(want.crc32))
+            {
+               linkOrCopy(mine, dest);
+               j.note = "same_as_installed";
+            }
+            else
+            {
+               download(buildbotUrl() + downloadName(j.core), zip, j, listener);
+               if (j.cancel)
+               {
+                  finish(j, CANCELLED, "");
+                  return;
+               }
+               synchronized (this)
+               {
+                  j.state = INSTALLING;
+               }
+               listener.onProgress(j);
+               installZip(zip, j.core, dir);
+            }
+         }
+         j.crc32 = crc32(dest);
+         finish(j, DONE, "");
+      }
+      catch (Exception e)
+      {
+         Log.w(TAG, "netplay slot " + j.core + " failed", e);
+         finish(j, j.cancel ? CANCELLED : FAILED, j.cancel ? "" : String.valueOf(e.getMessage()));
+      }
+      finally
+      {
+         zip.delete();
+         listener.onProgress(j);
+      }
+   }
+
+   /** 자리의 이름이 본 코어 파일을 가리키게 한다(같은 빌드를 두 벌 두지 않는다). 링크를 못 만드는 기기에서는 복사한다. */
+   private void linkOrCopy(File src, File dest) throws IOException
+   {
+      File tmp = new File(dest.getParentFile(), "." + dest.getName() + ".part");
+      tmp.delete();
+      boolean linked = false;
+      try
+      {
+         android.system.Os.symlink(src.getAbsolutePath(), tmp.getAbsolutePath());
+         linked = tmp.isFile();
+      }
+      catch (Exception e)
+      {
+         Log.w(TAG, "symlink failed — copying " + src.getName(), e);
+      }
+      if (!linked)
+      {
+         tmp.delete();
+         InputStream in = new FileInputStream(src);
+         try
+         {
+            writeSynced(in, tmp);
+         }
+         finally
+         {
+            closeQuietly(in);
+         }
+      }
+      if (!tmp.renameTo(dest))
+      {
+         tmp.delete();
+         throw new IOException("rename failed: " + dest);
+      }
+   }
+
+   private static File slotMark(File dir, String core)
+   {
+      return new File(dir, "." + core + ".used");
+   }
+
+   /** 그 코어를 지금 썼다고 적는다 — 치우기(pruneSlot)가 이 시각을 본다. */
+   private static void touchSlot(File dir, String core)
+   {
+      File mark = slotMark(dir, core);
+      try
+      {
+         if (!mark.isFile())
+            new FileOutputStream(mark).close();
+         mark.setLastModified(System.currentTimeMillis());
+      }
+      catch (IOException ignored)
+      {
+      }
+   }
+
+   /** 넷플레이 자리에서 14일 동안 안 쓴 코어를 지운다(keep 은 남긴다). 자리의 파일만 — 링크가 가리키는 본 코어는 그대로다. */
+   void pruneSlot(File dir, String keep)
+   {
+      File[] files = dir.listFiles();
+      if (files == null)
+         return;
+      long now = System.currentTimeMillis();
+      for (File f : files)
+      {
+         String name = f.getName();
+         if (!name.endsWith(SUFFIX) || name.startsWith("."))
+            continue;
+         String core = name.substring(0, name.length() - SUFFIX.length());
+         if (core.equals(keep))
+            continue;
+         File mark = slotMark(dir, core);
+         if (!mark.isFile())
+         {
+            // 표시가 없으면(표시만 지워진 경우) 지금부터 센다.
+            touchSlot(dir, core);
+            continue;
+         }
+         if (now - mark.lastModified() > SLOT_KEEP_MS)
+         {
+            Log.i(TAG, "netplay slot: removing " + name + " (not used for 14 days)");
+            f.delete();
+            mark.delete();
+         }
+      }
+   }
+
+   /** 넷플레이 자리의 그 코어를 지운다(시험 · 정리용). */
+   boolean deleteSlot(String slot, String core)
+   {
+      File dir = slotDir(slot);
+      slotMark(dir, core).delete();
+      // 끊긴 링크는 isFile 이 아니어도 지운다.
+      return new File(dir, core + SUFFIX).delete();
    }
 
    /**
@@ -765,6 +1000,11 @@ final class CoreStore
 
    private void installZip(File zip, String id) throws IOException
    {
+      installZip(zip, id, coresDir());
+   }
+
+   private void installZip(File zip, String id, File dir) throws IOException
+   {
       ZipFile zf = new ZipFile(zip);
       try
       {
@@ -788,7 +1028,7 @@ final class CoreStore
          InputStream in = zf.getInputStream(pick);
          try
          {
-            placeCore(in, id);
+            placeCore(in, id, dir);
          }
          finally
          {
@@ -804,8 +1044,11 @@ final class CoreStore
    /** 임시 파일에 다 쓰고 ELF · ABI 를 본 다음 이름을 바꿔 넣는다 — 실행 중인 코어가 있어도 옛 파일은 그대로 매핑된 채 남는다. */
    private void placeCore(InputStream in, String id) throws IOException
    {
-      File dir = coresDir();
-      File tmp = new File(dir, "." + id + SUFFIX + ".part");
+      placeCore(in, id, coresDir());
+   }
+
+   private static void writeSynced(InputStream in, File tmp) throws IOException
+   {
       FileOutputStream out = new FileOutputStream(tmp);
       try
       {
@@ -819,6 +1062,14 @@ final class CoreStore
       {
          out.close();
       }
+   }
+
+   private void placeCore(InputStream in, String id, File dir) throws IOException
+   {
+      File tmp = new File(dir, "." + id + SUFFIX + ".part");
+      // 끊긴 일이 남긴 임시 이름이 링크일 수 있다 — 따라가서 본 코어에 쓰지 않게 먼저 지운다.
+      tmp.delete();
+      writeSynced(in, tmp);
       try
       {
          checkElf(tmp);
@@ -828,7 +1079,7 @@ final class CoreStore
          tmp.delete();
          throw e;
       }
-      File dest = coreFile(id);
+      File dest = new File(dir, id + SUFFIX);
       if (!tmp.renameTo(dest))
       {
          tmp.delete();

@@ -103,14 +103,27 @@ python haebang\build.py
 - `lib_version` — call `lib_version`(arg = 코어 이름): 코어가 스스로 말하는 이름 · 버전(`retro_get_system_info`) `{"core","crc32","lib_name","lib_version"}`(hb11).
   넷플레이 악수가 견주는 값이 이것이다(예 `v1.0.0.03 261110 GITa836e52`). `cores` 의 `core_version` 은 info 파일의 `display_version` 이라 실제 빌드와 다를 수 있다.
   코어 .so 를 잠깐 실어(`dlopen`) 읽고 닫는다 — 파일 크기 · 시각이 같으면 다시 읽지 않는다. 읽기뿐이라 누구나 부른다.
+- `netplay_slot` — 넷플레이용 코어 자리(hb16). 두 기기의 코어 버전이 다르면 넷플레이가 어긋나거나 끊긴다(FBNeo `sf2hf` 는 2초 만에).
+  buildbot 은 최신만 주므로 다른 쪽이 최신으로 올라와야 맞는데, `install force` · `update` 는 사용자의 코어를 갈아 끼운다(상태저장 · 롬셋이 안 맞게 된다).
+  그래서 **그 판에만 쓸 최신 빌드를 따로** 둔다 — `<앱 데이터>/cores_netplay/<코어>_libretro_android.so`. 본 코어(`cores`) · 세이브는 그대로다.
+  - 받기: call `install`, arg = 코어, extras `slot` = `netplay` → `jobs`(줄에 `slot` 칸). 늘 대기 중인 일이 돌아오고 일꾼이 정한다:
+    buildbot 목록을 **지금** 받아(못 받으면 실패 `buildbot index: …`) 자리의 파일이 그 빌드면 `done`(note `already_installed`),
+    본 코어가 그 빌드면 받지 않고 자리에서 본 코어를 가리키게 하고(링크 — 못 만드는 기기는 복사, note `same_as_installed`), 아니면 받는다.
+    `force` 는 보지 않는다. `update` + `slot` 은 거절한다. 같은 코어의 본 받기와 자리 받기는 서로 다른 일이다.
+  - 목록: `…/cores?slot=netplay`(`&format=json`) — 줄 모양은 `cores` 와 같다. 그 `path` 를 `LIBRETRO` 로 넘겨 켠다(파일 이름이 본 코어와 같아 info 를 찾는다).
+  - 버전: call `lib_version`, arg = 코어, extras `slot` = `netplay`.
+  - 치우기: 14일 동안 `install` 로 부르지 않은 자리의 코어는 지운다(앱이 깨어날 때 · 자리 받기를 시작할 때). 쓴 시각은 `cores_netplay/.<코어>.used`.
+    `delete` + `slot`(셸 · 서명 권한)로 바로 지울 수도 있다 — 시험용.
+  - 모르는 자리 이름은 `unknown slot` 으로 거절한다. `info` 의 `netplay_cores_dir`.
+  - 요청: 런처 저장소 `docs/HBRETROARCH_NETPLAY_CORE_SLOT.md`.
 
 ### 읽기 — `content query`
 
 | URI | 줄 |
 |---|---|
-| `…/info` | api_version · caps · package · version_name · abi · cores_dir · info_dir · system_dir · config_path · buildbot_url · core_count · index_age_ms |
+| `…/info` | api_version · caps · package · version_name · abi · cores_dir · netplay_cores_dir · info_dir · system_dir · config_path · buildbot_url · core_count · index_age_ms |
 | `…/cores` | core · file · path · size · mtime · crc32 · abi · abi_ok · display_name · system_name · extensions · core_version · firmware_count · corename · savestate |
-| `…/jobs` | id · core · source · state(queued/downloading/installing/done/failed/cancelled) · progress · bytes · total · error · note · crc32 |
+| `…/jobs` | id · core · source · slot(빈 값 = 본 코어) · state(queued/downloading/installing/done/failed/cancelled) · progress · bytes · total · error · note · crc32 |
 | `…/available` | core · file · date · crc32 · installed · local_crc32 · up_to_date (buildbot `.index-extended`) |
 | `…/saves?core=<코어>&rom=<롬 전체 경로>` | 그 게임의 롬저장 · 상태저장 폴더 — 아래 '세이브 폴더' |
 

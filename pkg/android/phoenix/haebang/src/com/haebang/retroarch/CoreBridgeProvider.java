@@ -27,10 +27,12 @@ import java.util.Map;
  *
  * 읽기 — content://<패키지>.cores/{info|cores|jobs|available|saves}
  *   ?core=snes9x  한 코어만 · ?format=json  한 줄 'json' 칸에 JSON 으로 · ?refresh=1  (available) 목록을 지금 받음
+ *   cores?slot=netplay  넷플레이용 코어 자리(hb16)의 코어 — 사용자의 코어와 따로 둔 최신 빌드
  *   saves?core=snes9x&rom=<롬 전체 경로>  그 게임의 롬저장 · 상태저장 폴더(SaveDirs) — 둘 다 없으면 기본 폴더 · 정렬 설정만
  * 부르기 — call(method, arg, extras)
  *   ping · info · install(arg=코어들, force) · update(arg=코어들 또는 빈 값=깔린 것 전부) · job(arg=번호) · cancel(arg=번호)
  *   refresh_index · install_file(arg=기기 안 경로, name) · delete(arg=코어)
+ *   install · lib_version · delete 는 extras slot="netplay" 로 넷플레이용 자리를 가리킬 수 있다(caps netplay_slot)
  *
  * install · update 는 공식 buildbot 에서만 받으므로 누구나 부를 수 있다.
  * install_file · delete 는 셸(adb) · root · 같은 서명 권한(<패키지>.permission.MANAGE_CORES)만 — 아무 .so 나 넣게 되기 때문이다.
@@ -42,13 +44,30 @@ public class CoreBridgeProvider extends ContentProvider
          "display_name", "system_name", "extensions", "core_version", "firmware_count",
          "corename", "savestate" };
    private static final String[] JOB_COLUMNS = {
-         "id", "core", "source", "state", "progress", "bytes", "total", "error", "note", "crc32", "created", "finished" };
+         "id", "core", "source", "slot", "state", "progress", "bytes", "total", "error", "note", "crc32", "created", "finished" };
    private static final String[] AVAILABLE_COLUMNS = {
          "core", "file", "date", "crc32", "installed", "local_crc32", "up_to_date" };
 
    @Override
    public boolean onCreate()
    {
+      // 앱이 깨어날 때마다 오래 안 쓴 넷플레이용 코어를 치운다(런처는 쓰기 직전에 늘 install 을 불러 쓴 시각을 새로 적는다).
+      final Context ctx = getContext();
+      new Thread(new Runnable()
+      {
+         @Override
+         public void run()
+         {
+            try
+            {
+               CoreStore st = CoreStore.get(ctx);
+               st.pruneSlot(st.netplayDir(), null);
+            }
+            catch (Exception ignored)
+            {
+            }
+         }
+      }, "hb-slot-prune").start();
       return true;
    }
 
@@ -79,7 +98,7 @@ public class CoreBridgeProvider extends ContentProvider
          else if ("cores".equals(table))
          {
             cols = CORE_COLUMNS;
-            rows = cores(only);
+            rows = cores(only, CoreStore.slotName(uri.getQueryParameter("slot")));
          }
          else if ("jobs".equals(table))
          {
@@ -143,6 +162,7 @@ public class CoreBridgeProvider extends ContentProvider
       o.put("abi", st.abi());
       o.put("android_sdk", Build.VERSION.SDK_INT);
       o.put("cores_dir", st.coresDir().getAbsolutePath());
+      o.put("netplay_cores_dir", st.netplayDir().getAbsolutePath());
       o.put("info_dir", st.infoDir().getAbsolutePath());
       o.put("system_dir", st.systemDir());
       o.put("config_path", st.configPath());
@@ -152,10 +172,10 @@ public class CoreBridgeProvider extends ContentProvider
       return o;
    }
 
-   private JSONArray cores(String only) throws JSONException
+   private JSONArray cores(String only, String slot) throws JSONException
    {
       JSONArray rows = new JSONArray();
-      for (CoreStore.Installed it : store().listInstalled(true))
+      for (CoreStore.Installed it : store().listInstalled(slot, true))
       {
          if (only != null && !only.equals(it.core))
             continue;
@@ -309,6 +329,37 @@ public class CoreBridgeProvider extends ContentProvider
       {
          boolean update = "update".equals(method);
          List<String> names = CoreStore.splitCores(arg);
+         String slot = CoreStore.slotName(extras.getString("slot"));
+         if (slot.length() > 0)
+         {
+            // 넷플레이용 자리 — 사용자의 코어는 그대로 두고 최신 빌드를 따로 둔다. 최신인지는 일꾼이 목록을 지금 받아서 정한다.
+            if (update)
+               throw new IllegalArgumentException("a slot takes install only (it always ends at the latest build)");
+            if (names.isEmpty())
+               throw new IllegalArgumentException("no core given (arg=fbneo)");
+            JSONArray slotJobs = new JSONArray();
+            JSONArray bad = new JSONArray();
+            for (String name : names)
+            {
+               String id = CoreStore.coreId(name);
+               if (id == null)
+               {
+                  bad.put(new JSONObject().put("name", name).put("error", "bad core name"));
+                  continue;
+               }
+               slotJobs.put(st.enqueueSlot(id, slot).toJson());
+            }
+            if (slotJobs.length() > 0)
+               CoreInstallService.start(getContext());
+            r.put("jobs", slotJobs);
+            if (bad.length() > 0)
+            {
+               r.put("rejected", bad);
+               if (slotJobs.length() == 0)
+                  r.put("ok", false);
+            }
+            return;
+         }
          if (update && names.isEmpty())
          {
             for (CoreStore.Installed it : st.listInstalled(false))
@@ -427,7 +478,8 @@ public class CoreBridgeProvider extends ContentProvider
          if (id == null)
             throw new IllegalArgumentException("bad core name: " + arg);
          r.put("core", id);
-         r.put("ok", st.delete(id));
+         String slot = CoreStore.slotName(extras.getString("slot"));
+         r.put("ok", slot.length() > 0 ? st.deleteSlot(slot, id) : st.delete(id));
          return;
       }
       if ("lib_version".equals(method))
@@ -436,7 +488,8 @@ public class CoreBridgeProvider extends ContentProvider
          String id = CoreStore.coreId(arg);
          if (id == null)
             throw new IllegalArgumentException("bad core name: " + arg);
-         File f = st.installedFile(id);
+         String slot = CoreStore.slotName(extras.getString("slot"));
+         File f = st.slotFile(slot, id);
          if (f == null)
             throw new IllegalArgumentException("not installed: " + id);
          String[] lib = st.libInfo(f);
