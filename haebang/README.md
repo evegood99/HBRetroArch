@@ -98,6 +98,25 @@ python haebang\build.py
     런어헤드 프레임을 빼지 않고 준 값 그대로, 최댓값은 `준 값 + netplay_input_latency_frames_range`(기본 0 → 고정).
   - 다른 값(`abc` · `99` · `03`) · `client` 는 무시하고 설정대로. 다음 실행에 없으면 없는 것.
   - logcat(`RetroArch`): 받을 때 `[ENV] Netplay latency "N".`, 무시할 때 `[ENV] Ignoring netplay latency "…".`, 방을 열 때 `[Netplay] HB input latency frames N.`
+- `netplay_check` — 인텐트 `NETPLAYCHECK`(`"0"`~`"3600"`, hb17): 그 방의 상태 검사 주기(프레임, `0` = 검사 안 함). `NETPLAY` = `host` 와 함께 올 때만 받는다 —
+  검사는 방장이 CRC 를 보내야 시작되므로 방장 값만 뜻이 있다. 설정(`netplay_check_frames`) · `retroarch.cfg` 는 그대로다.
+  - 왜: FBNeo · PicoDrive · Genesis Plus GX · Beetle PCE 는 되감기를 거치면 화면은 같은데 상태 바이트가 달라진다. 검사가 매번 틀려 참가자가
+    10초마다 방장 상태를 다시 받고 빨리 감기로 따라잡는다('워프'). 런처가 그 코어의 방에만 `"0"` 을 보낸다. 끄면 진짜 어긋남도 고쳐지지 않는다.
+  - logcat(`RetroArch`): `[ENV] Netplay check "0".` · 무시할 때 `[ENV] Ignoring netplay check "…".`, 방을 열 때 로그 `[Netplay] HB state check frames 0.`
+- `netplay_pause` — 런처 방에서 한쪽이 멈추면 둘 다 멈췄다가 풀리면 이어 간다(hb17). 인텐트는 그대로다.
+  - 전에는: 안드로이드는 창이 포커스를 잃으면(시스템 창 · 알림 그늘 · 전원 메뉴) 설정과 무관하게 멈추고 PAUSE 를 보낸다. 방장은 `netplay_allow_pausing` 이 꺼져 있어
+    그 참가자를 바로 내보냈다. 켜도 안 됐다 — RetroArch 1.22.2 는 RESUME 을 **받은 쪽**이 멈춤을 못 푼다(`remote_unpaused` 의 조건식 괄호가 잘못돼
+    `flags & 1`, 살아 있는 연결이 있으면 늘 '아직 멈춘 상대가 있다'). 이 괄호를 고쳤다(`netplay_frontend_paused` 의 같은 식도).
+  - 런처 방의 방장은 그 판만 `allow_pausing` 을 켠다(설정은 그대로). 참가자는 방장 값을 악수 때 받는다.
+  - **공식 RetroArch 상대(윈도우)는 그 버그가 그대로다** — PAUSE 를 보내면 영영 멈춘다. 그래서 접속 뒤 서로 새 명령 `NETPLAY_CMD_HB_CAPS`(0x4842, uint32 비트 — 1 = 멈춤을 받고 푼다)를
+    한 번 보내고, 그 말을 한 상대에게만 PAUSE · RESUME 을 보낸다. 공식판은 모르는 명령으로 넘긴다(로그에 경고 한 줄).
+    - 못 받는 상대에게는 이쪽이 멈춰도 알리지 않는다 — 그쪽에는 느린 네트워크처럼 보인다(원본 한도 그대로: 방장은 5초 뒤 그 참가자를 내보내고, 참가자는 10초 뒤 나간다).
+    - 메뉴 · 일시정지 단축키로 **일부러** 멈추는 것(`RARCH_NETPLAY_CTL_ALLOW_PAUSE`)도 모든 상대가 받을 수 있을 때만 된다. 아니면 전처럼 메뉴 뒤에서 게임이 계속 돈다.
+    - 공식 참가자가 스스로 멈추는 것은 HB 방장이 받아 준다(받는 쪽이 HB 라 RESUME 에 풀린다).
+  - 기다리는 쪽: '○○ 일시정지됨' 알림을 3초마다 다시 띄운다(화면이 서 있는 동안). 한도 — 방장은 60초 멈춘 참가자를 내보내고 혼자 이어 간다(다시 들어올 수 있다),
+    참가자는 방장이 300초 멈추면 나간다.
+  - 로그(`log_verbosity`): `[Netplay] HB: "닉" takes pauses.` · `HB: paused here (frame N).` · `HB: resumed here (frame N).` · `HB: "닉" resumed (frame N).` · `HB: peer paused for too long.`
+  - 런처 방에서 연결을 끊을 때마다 `[Netplay] HB: hangup at line N (frame F, stall S, paused 이쪽/상대).` — 끊은 자리(소스 줄)를 남긴다.
 - `default_dirs` — 게임 화면을 바로 켜도 기본 폴더가 채워진다(hb13, 아래 '기본 폴더'). `saves` 답의 `default` 는 `RetroArch/saves` · `states`
 - `input_defaults` — SELECT + START 로 메뉴 · 패드가 있으면 화면 버튼 숨김이 기본(hb14, 아래 '입력 기본값')
 - `lib_version` — call `lib_version`(arg = 코어 이름): 코어가 스스로 말하는 이름 · 버전(`retro_get_system_info`) `{"core","crc32","lib_name","lib_version"}`(hb11).

@@ -626,6 +626,21 @@ static bool hb_entry_slot_valid(const char *s)
 /* HB: network/netplay/netplay_frontend.c - a room opened by HB Launcher */
 extern bool hb_netplay_private;
 extern int hb_netplay_latency;
+extern int hb_netplay_check;
+
+/* HB: NETPLAYCHECK value - "0".."3600" frames, no sign, no leading zeros. */
+static bool hb_netplay_check_valid(const char *s)
+{
+   size_t i;
+   size_t _len = strlen(s);
+
+   if (_len < 1 || _len > 4 || (s[0] == '0' && _len > 1))
+      return false;
+   for (i = 0; i < _len; i++)
+      if (s[i] < '0' || s[i] > '9')
+         return false;
+   return atoi(s) <= 3600;
+}
 
 /* HB: NETPLAYLATENCY value - "0".."10", no sign, no leading zeros. */
 static bool hb_netplay_latency_valid(const char *s)
@@ -1610,6 +1625,7 @@ static void frontend_unix_get_env(int *argc,
 #ifdef HAVE_NETWORKING
    hb_netplay_private = false;
    hb_netplay_latency = -1;
+   hb_netplay_check   = -1;
 #endif
 
    frontend_android_get_version(&major, &minor, &rel);
@@ -1819,6 +1835,30 @@ static void frontend_unix_get_env(int *argc,
             else
                __android_log_print(ANDROID_LOG_WARN,
                   "RetroArch", "[ENV] Ignoring netplay latency \"%s\".\n",
+                  argv ? argv : "");
+            (*env)->ReleaseStringUTFChars(env, jstr, argv);
+         }
+
+         /* HB: NETPLAYCHECK = "0" (or a number of frames) - how often the
+          * host checks the guest's state for this room. Host only: the
+          * guest only compares what the host sends. */
+         CALL_OBJ_METHOD_PARAM(env, jstr, obj, android_app->getStringExtra,
+               (*env)->NewStringUTF(env, "NETPLAYCHECK"));
+         if (jstr)
+         {
+            argv = (*env)->GetStringUTFChars(env, jstr, 0);
+            if (     argv
+                  && string_is_equal(netplay_mode, "host")
+                  && hb_netplay_check_valid(argv))
+            {
+               hb_netplay_check = atoi(argv);
+               __android_log_print(ANDROID_LOG_INFO,
+                  "RetroArch", "[ENV] Netplay check \"%d\".\n",
+                  hb_netplay_check);
+            }
+            else
+               __android_log_print(ANDROID_LOG_WARN,
+                  "RetroArch", "[ENV] Ignoring netplay check \"%s\".\n",
                   argv ? argv : "");
             (*env)->ReleaseStringUTFChars(env, jstr, argv);
          }

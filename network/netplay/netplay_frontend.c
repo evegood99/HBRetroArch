@@ -225,6 +225,33 @@ static bool hb_netplay_quit = false;
  * -1 = not given: the setting is used. It is a session value: the setting
  * (and so retroarch.cfg) stays as the user left it. */
 int hb_netplay_latency      = -1;
+/* HB: NETPLAYCHECK - the host's state check interval in frames for this
+ * room (0 = no checks); -1 = the setting. Some cores (FBNeo, PicoDrive,
+ * Genesis Plus GX, Beetle PCE) serialize differently after a rollback
+ * while playing the same - every check then fails and the guest reloads
+ * the host's state every netplay_check_frames ("warping"). */
+int hb_netplay_check        = -1;
+
+/* HB: a launcher room takes pauses (a device losing the focus pauses on
+ * Android whatever the settings say) instead of dropping the guest. The
+ * peer that waits shows the notice again every few seconds and gives up
+ * after a while: the host drops a guest paused for a minute (and plays
+ * on alone, the guest may come back), the guest leaves a host paused
+ * for five. */
+#define HB_PAUSE_NOTICE_USEC      (3 * 1000 * 1000)
+#define HB_PAUSE_HOST_LIMIT_USEC  (60 * 1000 * 1000)
+#define HB_PAUSE_GUEST_LIMIT_USEC (300 * 1000 * 1000)
+static retro_time_t hb_pause_since  = 0;
+static retro_time_t hb_pause_notice = 0;
+
+/* HB: NETPLAY_CMD_HB_CAPS bits */
+#define HB_NETPLAY_CAP_PAUSE 1
+
+/* HB: netplay_hangup() notes the calling line for the log */
+static int hb_hangup_line = 0;
+static void netplay_hangup_real(netplay_t *netplay,
+      struct netplay_connection *connection);
+#define netplay_hangup(n, c)    do { hb_hangup_line = __LINE__; netplay_hangup_real((n), (c)); } while (0)
 
 bool netplay_hb_take_quit(void)
 {
@@ -3810,6 +3837,8 @@ static bool netplay_sync_pre_frame(netplay_t *netplay)
          }
 
          /* Set it up */
+         connection->flags &= ~(NETPLAY_CONN_FLAG_HB_CAPS_SENT
+                              | NETPLAY_CONN_FLAG_HB_PAUSE);
          connection->flags |= NETPLAY_CONN_FLAG_ACTIVE;
          connection->fd     = new_fd;
          connection->mode   = NETPLAY_CONNECTION_INIT;
@@ -4184,9 +4213,12 @@ static void remote_unpaused(netplay_t *netplay,
     for (i = 0; i < netplay->connections_size; i++)
     {
        struct netplay_connection *sc = &netplay->connections[i];
-       if (sc->flags &
-                 ((NETPLAY_CONN_FLAG_ACTIVE | NETPLAY_CONN_FLAG_PAUSED)
-             ==   (NETPLAY_CONN_FLAG_ACTIVE | NETPLAY_CONN_FLAG_PAUSED)))
+       /* HB: the brackets were around the comparison - "flags & 1", true
+        * for every active connection, so a room never left a pause on
+        * the side that was told to resume (RetroArch 1.22.2). */
+       if (   (sc->flags
+                & (NETPLAY_CONN_FLAG_ACTIVE | NETPLAY_CONN_FLAG_PAUSED))
+             ==   (NETPLAY_CONN_FLAG_ACTIVE | NETPLAY_CONN_FLAG_PAUSED))
        {
           netplay->remote_paused = true;
           break;
@@ -4201,7 +4233,7 @@ static void remote_unpaused(netplay_t *netplay,
  *
  * Disconnects an active Netplay connection due to an error
  */
-static void netplay_hangup(netplay_t *netplay,
+static void netplay_hangup_real(netplay_t *netplay,
       struct netplay_connection *connection)
 {
    size_t i;
@@ -4212,6 +4244,14 @@ static void netplay_hangup(netplay_t *netplay,
 
    if (!netplay || (!(connection->flags & NETPLAY_CONN_FLAG_ACTIVE)))
       return;
+
+   /* HB: which of the many hangup places it was - a room that just ends
+    * is hard to tell apart otherwise */
+   if (hb_netplay_private)
+      RARCH_LOG("[Netplay] HB: hangup at line %d (frame %u, stall %d, paused %d/%d).\n",
+            hb_hangup_line, (unsigned)netplay->self_frame_count,
+            (int)netplay->stall,
+            netplay->local_paused ? 1 : 0, netplay->remote_paused ? 1 : 0);
 
    was_playing = connection->mode == NETPLAY_CONNECTION_PLAYING ||
       connection->mode == NETPLAY_CONNECTION_SLAVE;
@@ -6373,6 +6413,9 @@ static bool netplay_get_cmd(netplay_t *netplay,
 
       case NETPLAY_CMD_RESUME:
          NETPLAY_ASSERT_MODUS(NETPLAY_MODUS_INPUT_FRAME_SYNC);
+         if (hb_netplay_private)
+            RARCH_LOG("[Netplay] HB: \"%s\" resumed (frame %u).\n",
+                  connection->nick, (unsigned)netplay->self_frame_count);
          remote_unpaused(netplay, connection);
          break;
 
@@ -6593,6 +6636,36 @@ static bool netplay_get_cmd(netplay_t *netplay,
                return false;
             netplay->input_latency_frames_min = ntohl(frames[0]);
             netplay->input_latency_frames_max = ntohl(frames[1]);
+         }
+         break;
+
+      case NETPLAY_CMD_HB_CAPS:
+         {
+            /* HB: what the peer can do (launcher rooms) */
+            uint32_t caps = 0;
+            unsigned char buf[64];
+
+            if (cmd_size >= sizeof(caps))
+            {
+               RECV(&caps, sizeof(caps))
+                  return false;
+               cmd_size -= sizeof(caps);
+               caps      = ntohl(caps);
+            }
+            /* Later versions may say more */
+            while (cmd_size)
+            {
+               RECV(buf, (cmd_size > sizeof(buf)) ? sizeof(buf) : cmd_size)
+                  return false;
+               cmd_size -= recvd;
+            }
+
+            if (hb_netplay_private && (caps & HB_NETPLAY_CAP_PAUSE))
+            {
+               connection->flags |= NETPLAY_CONN_FLAG_HB_PAUSE;
+               RARCH_LOG("[Netplay] HB: \"%s\" takes pauses.\n",
+                     connection->nick);
+            }
          }
          break;
 
@@ -7411,6 +7484,9 @@ static netplay_t *netplay_new(const char *server, const char *mitm,
 
       netplay->allow_pausing =
          settings->bools.netplay_allow_pausing;
+      /* HB: launcher rooms take pauses (see hb_pause_since) */
+      if (hb_netplay_private)
+         netplay->allow_pausing = true;
       netplay->input_latency_frames_min =
          settings->uints.netplay_input_latency_frames_min;
       if (settings->bools.run_ahead_enabled)
@@ -7580,6 +7656,10 @@ static void netplay_frontend_paused(netplay_t *netplay, bool paused)
       return;
 
    netplay->local_paused = paused;
+   if (hb_netplay_private)
+      RARCH_LOG("[Netplay] HB: %s here (frame %u).\n",
+            paused ? "paused" : "resumed",
+            (unsigned)netplay->self_frame_count);
 
    /* Communicating this is a bit odd: If exactly one other connection is
     * paused, then we must tell them that we're unpaused, as from their
@@ -7588,9 +7668,10 @@ static void netplay_frontend_paused(netplay_t *netplay, bool paused)
    for (i = 0; i < netplay->connections_size; i++)
    {
       struct netplay_connection *connection = &netplay->connections[i];
-      if (connection->flags &
-                ((NETPLAY_CONN_FLAG_ACTIVE | NETPLAY_CONN_FLAG_PAUSED)
-            ==  (NETPLAY_CONN_FLAG_ACTIVE | NETPLAY_CONN_FLAG_PAUSED)))
+      /* HB: brackets as in remote_unpaused */
+      if (   (connection->flags
+               & (NETPLAY_CONN_FLAG_ACTIVE | NETPLAY_CONN_FLAG_PAUSED))
+            ==  (NETPLAY_CONN_FLAG_ACTIVE | NETPLAY_CONN_FLAG_PAUSED))
          paused_ct++;
    }
 
@@ -7602,6 +7683,12 @@ static void netplay_frontend_paused(netplay_t *netplay, bool paused)
    for (i = 0; i < netplay->connections_size; i++)
    {
       struct netplay_connection *connection = &netplay->connections[i];
+      /* HB: launcher rooms - not to a peer that would stay paused for
+       * ever (RetroArch 1.22.2). It sees us stop like a slow network. */
+      if (     hb_netplay_private
+            && !(connection->flags & NETPLAY_CONN_FLAG_HB_PAUSE))
+         continue;
+
       if (     (connection->flags & NETPLAY_CONN_FLAG_ACTIVE)
             && (connection->mode >= NETPLAY_CONNECTION_CONNECTED))
       {
@@ -8958,6 +9045,117 @@ static void netplay_disconnect(netplay_t *netplay)
 }
 
 /**
+ * hb_netplay_send_caps:
+ *
+ * HB: launcher rooms - tell every peer once that we take a pause and leave
+ * it again when told. RetroArch 1.22.2 does not leave it (see
+ * remote_unpaused), so a pause is only sent to a peer that said the same.
+ */
+static void hb_netplay_send_caps(netplay_t *netplay)
+{
+   size_t i;
+   uint32_t caps = htonl(HB_NETPLAY_CAP_PAUSE);
+
+   for (i = 0; i < netplay->connections_size; i++)
+   {
+      struct netplay_connection *connection = &netplay->connections[i];
+      if (     !(connection->flags & NETPLAY_CONN_FLAG_ACTIVE)
+            ||  (connection->flags & NETPLAY_CONN_FLAG_HB_CAPS_SENT)
+            ||  connection->mode < NETPLAY_CONNECTION_CONNECTED)
+         continue;
+      connection->flags |= NETPLAY_CONN_FLAG_HB_CAPS_SENT;
+      netplay_send_raw_cmd(netplay, connection, NETPLAY_CMD_HB_CAPS,
+            &caps, sizeof(caps));
+   }
+}
+
+/**
+ * hb_netplay_peers_pause:
+ *
+ * HB: true when every connected peer of a launcher room takes a pause.
+ * With a peer that does not, pausing here on purpose (menu, hotkey) would
+ * leave it running into a stall - the game keeps running instead, as with
+ * "allow pausing" off.
+ */
+static bool hb_netplay_peers_pause(netplay_t *netplay)
+{
+   size_t i;
+
+   for (i = 0; i < netplay->connections_size; i++)
+   {
+      struct netplay_connection *connection = &netplay->connections[i];
+      if (     (connection->flags & NETPLAY_CONN_FLAG_ACTIVE)
+            && connection->mode >= NETPLAY_CONNECTION_CONNECTED
+            && !(connection->flags & NETPLAY_CONN_FLAG_HB_PAUSE))
+         return false;
+   }
+   return true;
+}
+
+/**
+ * hb_netplay_paused_peer:
+ *
+ * HB: called every frame while a peer of a launcher room is paused.
+ * Shows the "paused" notice again every few seconds (the screen stands
+ * still meanwhile) and gives up when it takes too long.
+ *
+ * Returns: false when netplay was shut down (guest giving up).
+ */
+static bool hb_netplay_paused_peer(netplay_t *netplay)
+{
+   size_t i;
+   retro_time_t now = cpu_features_get_time_usec();
+
+   if (!hb_pause_since)
+   {
+      hb_pause_since  = now;
+      hb_pause_notice = now + HB_PAUSE_NOTICE_USEC;
+      return true;
+   }
+
+   if (now - hb_pause_since >= (netplay->is_server
+            ? HB_PAUSE_HOST_LIMIT_USEC : HB_PAUSE_GUEST_LIMIT_USEC))
+   {
+      RARCH_LOG("[Netplay] HB: peer paused for too long.\n");
+      hb_pause_since = 0;
+      if (!netplay->is_server)
+      {
+         netplay_disconnect(netplay);
+         return false;
+      }
+      /* Drop the paused guests; the hangup un-pauses the room. */
+      for (i = 0; i < netplay->connections_size; i++)
+      {
+         struct netplay_connection *connection = &netplay->connections[i];
+         if (     (connection->flags & NETPLAY_CONN_FLAG_ACTIVE)
+               && (connection->flags & NETPLAY_CONN_FLAG_PAUSED))
+            netplay_hangup(netplay, connection);
+      }
+      return true;
+   }
+
+   if (now >= hb_pause_notice)
+   {
+      hb_pause_notice = now + HB_PAUSE_NOTICE_USEC;
+      for (i = 0; i < netplay->connections_size; i++)
+      {
+         struct netplay_connection *connection = &netplay->connections[i];
+         if (     (connection->flags & NETPLAY_CONN_FLAG_ACTIVE)
+               && (connection->flags & NETPLAY_CONN_FLAG_PAUSED))
+         {
+            char msg[512];
+            size_t _len = snprintf(msg, sizeof(msg),
+                  msg_hash_to_str(MSG_NETPLAY_PEER_PAUSED), connection->nick);
+            runloop_msg_queue_push(msg, _len, 1, 180, false, NULL,
+                  MESSAGE_QUEUE_ICON_DEFAULT, MESSAGE_QUEUE_CATEGORY_INFO);
+            break;
+         }
+      }
+   }
+   return true;
+}
+
+/**
  * netplay_pre_frame:
  * @netplay              : pointer to netplay object
  *
@@ -8969,6 +9167,10 @@ static void netplay_disconnect(netplay_t *netplay)
  **/
 static bool netplay_pre_frame(netplay_t *netplay)
 {
+   /* HB: launcher rooms - say what we can do, once per peer */
+   if (hb_netplay_private)
+      hb_netplay_send_caps(netplay);
+
    /* FIXME: This is an ugly way to learn we're not paused anymore */
    if (netplay->local_paused)
       netplay_frontend_paused(netplay, false);
@@ -9027,6 +9229,15 @@ static bool netplay_pre_frame(netplay_t *netplay)
             netplay->next_ping = ctime + NETPLAY_PING_TIME;
          }
       }
+   }
+
+   /* HB: waiting for a paused peer - say so, and not for ever */
+   if (hb_netplay_private)
+   {
+      if (!netplay->remote_paused)
+         hb_pause_since = 0;
+      else if (!hb_netplay_paused_peer(netplay))
+         return true; /* gave up as a guest: netplay is gone */
    }
 
    if ((netplay->stall || netplay->remote_paused)
@@ -9207,7 +9418,11 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
    net_st->flags &= ~NET_DRIVER_ST_FLAG_NETPLAY_CLIENT_DEFERRED;
    netplay        = netplay_new(
       server, mitm, port, mitm_session,
-      settings->ints.netplay_check_frames,
+      /* HB: the launcher's value for this room (host only) */
+      (     hb_netplay_private && hb_netplay_check >= 0
+         && !(net_st->flags & NET_DRIVER_ST_FLAG_NETPLAY_IS_CLIENT))
+         ? hb_netplay_check
+         : settings->ints.netplay_check_frames,
       &cbs,
       settings->bools.netplay_nat_traversal && !hb_netplay_private,
 #ifdef HAVE_DISCORD
@@ -9220,10 +9435,14 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
       goto failure;
 
    net_st->data = netplay;
+   hb_pause_since = 0;
 
    if (netplay->is_server)
    {
       const char *_msg;
+      if (hb_netplay_private && hb_netplay_check >= 0)
+         RARCH_LOG("[Netplay] HB state check frames %d.\n",
+               hb_netplay_check);
       if (mitm)
       {
          int  flen = 0;
@@ -9677,6 +9896,9 @@ bool netplay_driver_ctl(enum rarch_netplay_ctl_state state, void *data)
          ret = (!netplay || (netplay->allow_pausing &&
                   (netplay->modus != NETPLAY_MODUS_CORE_PACKET_INTERFACE ||
                      !netplay_have_any_active_connection(netplay))));
+         /* HB: launcher rooms - only when every peer takes the pause */
+         if (ret && netplay && hb_netplay_private)
+            ret = hb_netplay_peers_pause(netplay);
          break;
 
       case RARCH_NETPLAY_CTL_PAUSE:

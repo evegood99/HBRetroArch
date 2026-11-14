@@ -45,8 +45,8 @@ final class CoreStore
    static final String TAG = "HBCoreBridge";
    /** 2(hb8): saves 조회 · cores 의 corename · savestate 칸 · info 의 caps */
    static final int API_VERSION = 2;
-   /** 이 버전이 하는 일 — 런처는 이 글자로 기능을 확인한다(옛 버전에는 칸이 없다). autosave_leave 는 hb9, reload_saves 는 hb10, netplay · lib_version 은 hb11, netplay_latency 는 hb12, default_dirs 는 hb13, input_defaults 는 hb14, netplay_slot 은 hb16. */
-   static final String CAPS = "entry_slot,saves,thumb_default,autosave_leave,reload_saves,netplay,lib_version,netplay_latency,default_dirs,input_defaults,netplay_slot";
+   /** 이 버전이 하는 일 — 런처는 이 글자로 기능을 확인한다(옛 버전에는 칸이 없다). autosave_leave 는 hb9, reload_saves 는 hb10, netplay · lib_version 은 hb11, netplay_latency 는 hb12, default_dirs 는 hb13, input_defaults 는 hb14, netplay_slot 은 hb16, netplay_check · netplay_pause 는 hb17. */
+   static final String CAPS = "entry_slot,saves,thumb_default,autosave_leave,reload_saves,netplay,lib_version,netplay_latency,default_dirs,input_defaults,netplay_slot,netplay_check,netplay_pause";
    /**
     * 넷플레이용 코어 자리(hb16) — 두 기기의 코어 버전이 다를 때 그 판에만 쓸 최신 빌드를 사용자의 코어와 따로 둔다.
     * 자리 이름 "" 은 본 코어 폴더(cores), "netplay" 는 <앱 데이터>/cores_netplay.

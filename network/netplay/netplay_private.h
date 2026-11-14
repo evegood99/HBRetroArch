@@ -196,7 +196,12 @@ enum netplay_cmd
    /* These host settings should be honored by the client,
     * but they are not enforced. */
    NETPLAY_CMD_SETTING_ALLOW_PAUSING        = 0x2000,
-   NETPLAY_CMD_SETTING_INPUT_LATENCY_FRAMES = 0x2001
+   NETPLAY_CMD_SETTING_INPUT_LATENCY_FRAMES = 0x2001,
+
+   /* HB: what this peer can do - a uint32 of HB_NETPLAY_CAP_* bits, sent
+    * once after the handshake in a launcher room. Other RetroArch builds
+    * skip a command they do not know (with a warning in their log). */
+   NETPLAY_CMD_HB_CAPS        = 0x4842
 };
 
 #define NETPLAY_CMD_SYNC_BIT_PAUSED  (1U<<31)
@@ -364,7 +369,11 @@ enum netplay_connection_flags
    /* Is this connection allowed to play (server only)? */
    NETPLAY_CONN_FLAG_CAN_PLAY       = (1 << 2),
    /* Did we request a ping response? */
-   NETPLAY_CONN_FLAG_PING_REQUESTED = (1 << 3)
+   NETPLAY_CONN_FLAG_PING_REQUESTED = (1 << 3),
+   /* HB: we told this peer what we can do (launcher rooms) */
+   NETPLAY_CONN_FLAG_HB_CAPS_SENT   = (1 << 4),
+   /* HB: this peer un-pauses when told to (HB RetroArch hb17+) */
+   NETPLAY_CONN_FLAG_HB_PAUSE       = (1 << 5)
 };
 
 /* Each connection gets a connection struct */
