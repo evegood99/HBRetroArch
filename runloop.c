@@ -100,6 +100,7 @@
 #ifdef HAVE_NETWORKING
 /* HB: network/netplay/netplay_frontend.c */
 bool netplay_hb_take_quit(void);
+bool netplay_hb_extra_frame(bool begin);
 #endif
 
 /* HB: input/drivers/android_input.c */
@@ -8124,6 +8125,14 @@ void core_run(void)
 
 #ifdef HAVE_NETWORKING
    netplay_driver_ctl(RARCH_NETPLAY_CTL_POST_FRAME, NULL);
+
+   /* HB: a launcher room that fell behind a peer runs one more frame
+    * right away - not shown, not heard (hb_netplay_sync_frame). */
+   if (netplay_hb_extra_frame(true))
+   {
+      core_run();
+      netplay_hb_extra_frame(false);
+   }
 #endif
 }
 

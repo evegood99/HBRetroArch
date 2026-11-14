@@ -201,7 +201,14 @@ enum netplay_cmd
    /* HB: what this peer can do - a uint32 of HB_NETPLAY_CAP_* bits, sent
     * once after the handshake in a launcher room. Other RetroArch builds
     * skip a command they do not know (with a warning in their log). */
-   NETPLAY_CMD_HB_CAPS        = 0x4842
+   NETPLAY_CMD_HB_CAPS        = 0x4842,
+
+   /* HB: how far this peer runs ahead of the input it has from us, sent
+    * every few frames to a peer that said HB_NETPLAY_CAP_SYNC (see
+    * hb_netplay_sync_frame): int32 frames ahead (the least of the window
+    * of frames), uint32 input frames it had from us when that window
+    * began. */
+   NETPLAY_CMD_HB_SYNC        = 0x4843
 };
 
 #define NETPLAY_CMD_SYNC_BIT_PAUSED  (1U<<31)
@@ -373,7 +380,11 @@ enum netplay_connection_flags
    /* HB: we told this peer what we can do (launcher rooms) */
    NETPLAY_CONN_FLAG_HB_CAPS_SENT   = (1 << 4),
    /* HB: this peer un-pauses when told to (HB RetroArch hb17+) */
-   NETPLAY_CONN_FLAG_HB_PAUSE       = (1 << 5)
+   NETPLAY_CONN_FLAG_HB_PAUSE       = (1 << 5),
+   /* HB: this peer reports its frame lead and keeps pace (hb18+) */
+   NETPLAY_CONN_FLAG_HB_SYNC        = (1 << 6),
+   /* HB: ... and a report has arrived */
+   NETPLAY_CONN_FLAG_HB_REPORT      = (1 << 7)
 };
 
 /* Each connection gets a connection struct */
@@ -418,6 +429,18 @@ struct netplay_connection
     * Network latency has limited precision as we estimate it
     * once every pre-frame. */
    int32_t ping;
+
+   /* HB: frame lead bookkeeping of a launcher room (hb_netplay_sync_frame).
+    * "ahead" = our running frame minus the input frames we have from this
+    * peer; the smallest value of a window of frames is used. */
+   int32_t hb_ahead_peer;  /* the peer's last report of the same, about us */
+   uint32_t hb_seen_peer;  /* ... and our input frames it had at its start */
+   int32_t hb_ahead_cur;   /* this window */
+   int32_t hb_ahead_prev;  /* the window before */
+   uint32_t hb_seen_start; /* the peer's input frames we had at its start */
+   int32_t hb_ping16;      /* smoothed ping, ms * 16 */
+   uint8_t hb_ahead_n;     /* frames in this window */
+   uint8_t hb_ahead_wins;  /* windows completed (saturates) */
 
    /* fd associated with this connection */
    int fd;

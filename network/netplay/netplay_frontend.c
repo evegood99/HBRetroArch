@@ -246,12 +246,65 @@ static retro_time_t hb_pause_notice = 0;
 
 /* HB: NETPLAY_CMD_HB_CAPS bits */
 #define HB_NETPLAY_CAP_PAUSE 1
+#define HB_NETPLAY_CAP_SYNC  2
+
+/* HB: a launcher room keeps its devices at the same frame. Displays are
+ * not exactly 60 Hz (60.05 against 60.09 Hz is 2.5 frames a minute) and
+ * the faster device is left alone until it is a whole second ahead
+ * (NETPLAY_MAX_STALL_FRAMES). Being ahead means getting the other side's
+ * input late: its character runs on and jumps back at every change of
+ * direction, and each of those rewinds costs frames.
+ * - Every frame: "ahead" = our running frame minus the input frames we
+ *   have from the peer; the smallest of a window of frames is kept. It is
+ *   our lead plus the delay of the network.
+ * - A peer that keeps pace too sends its value every window
+ *   (NETPLAY_CMD_HB_SYNC): the difference of the two is twice our lead,
+ *   whatever the delay. For other peers (RetroArch, hb17) the delay is
+ *   taken from the ping.
+ * - Ahead: we sit one frame out, now and then (the further ahead, the
+ *   more often). Behind a peer that does not sit out: we run one more
+ *   frame, unseen and unheard.
+ * Leads are in half frames. */
+#define HB_SYNC_WINDOW   15  /* frames per window (and report) */
+#define HB_SYNC_STEPS    64  /* frames sat out that are remembered */
+#define HB_SYNC_LEAD     3   /* step at 1.5 frames (reported) */
+#define HB_SYNC_LEAD_EST 4   /* step at 2 frames (from the ping) */
+#define HB_SYNC_HOLD     30  /* frames between two steps at that lead */
+#define HB_SYNC_PACE     32  /* ... further off: HB_SYNC_PACE / lead */
+#define HB_SYNC_EXTRA    4   /* frames between two frames run on top, at least */
+#define HB_SYNC_TRY      24  /* frames run on top before looking if it helps */
+#define HB_SYNC_OFF_USEC (10 * 1000 * 1000) /* ... if not: none for so long */
+#define HB_SYNC_LOG_USEC (10 * 1000 * 1000)
+#define HB_SYNC_FRAME_USEC 16667 /* FIXME: 60 fps as elsewhere in this file */
+#define HB_SYNC_AUDIO    2048 /* frames of sound kept of the last frame */
+static int16_t hb_sync_audio[2 * HB_SYNC_AUDIO];
+static struct
+{
+   retro_time_t log_time;
+   retro_time_t idle_time; /* a frame that is not run began then (0 = none) */
+   size_t audio_n;       /* frames of sound of the last frame run */
+   bool audio_new;       /* the next sound begins a frame */
+   uint32_t tick;        /* frames looked at */
+   uint32_t step_tick;   /* the last step */
+   uint32_t steps[HB_SYNC_STEPS]; /* our input frame at each frame sat out */
+   unsigned steps_n;     /* ... how many, ever */
+   unsigned skipped;     /* frames sat out since the last log line */
+   unsigned caught;      /* frames run on top since the last log line */
+   retro_time_t extra_off; /* no frames on top before then */
+   int extra_lead2;      /* the lead when this run of frames on top began */
+   unsigned extra_run;   /* frames on top in this run */
+   unsigned extra_fail;  /* runs in a row that did not help */
+   bool extra;           /* run one more frame after this one */
+   bool muted;           /* ... which is this one */
+} hb_sync;
 
 /* HB: netplay_hangup() notes the calling line for the log */
 static int hb_hangup_line = 0;
 static void netplay_hangup_real(netplay_t *netplay,
       struct netplay_connection *connection);
 #define netplay_hangup(n, c)    do { hb_hangup_line = __LINE__; netplay_hangup_real((n), (c)); } while (0)
+
+static void hb_netplay_sync_audio(const int16_t *data, size_t frames);
 
 bool netplay_hb_take_quit(void)
 {
@@ -3838,7 +3891,12 @@ static bool netplay_sync_pre_frame(netplay_t *netplay)
 
          /* Set it up */
          connection->flags &= ~(NETPLAY_CONN_FLAG_HB_CAPS_SENT
-                              | NETPLAY_CONN_FLAG_HB_PAUSE);
+                              | NETPLAY_CONN_FLAG_HB_PAUSE
+                              | NETPLAY_CONN_FLAG_HB_SYNC
+                              | NETPLAY_CONN_FLAG_HB_REPORT);
+         connection->hb_ahead_n    = 0;
+         connection->hb_ahead_wins = 0;
+         connection->hb_ping16     = 0;
          connection->flags |= NETPLAY_CONN_FLAG_ACTIVE;
          connection->fd     = new_fd;
          connection->mode   = NETPLAY_CONNECTION_INIT;
@@ -4112,7 +4170,15 @@ static void netplay_sync_input_post_frame(netplay_t *netplay, bool stalled)
          else if (cur_time - netplay->catch_up_time > CATCH_UP_CHECK_TIME_USEC)
          {
             /* Time to check how far behind we are */
-            if (netplay->catch_up_behind <= cur_behind)
+            if (hb_netplay_private)
+            {
+               /* HB: a launcher room runs frames on top instead
+                * (hb_netplay_sync_frame). Taking vsync and audio sync
+                * off does not make an Android device run faster. */
+               netplay->catch_up_time   = cur_time;
+               netplay->catch_up_behind = cur_behind;
+            }
+            else if (netplay->catch_up_behind <= cur_behind)
             {
                /* We're definitely falling behind! */
                netplay->catch_up             = true;
@@ -6666,6 +6732,42 @@ static bool netplay_get_cmd(netplay_t *netplay,
                RARCH_LOG("[Netplay] HB: \"%s\" takes pauses.\n",
                      connection->nick);
             }
+            if (hb_netplay_private && (caps & HB_NETPLAY_CAP_SYNC))
+            {
+               connection->flags |= NETPLAY_CONN_FLAG_HB_SYNC;
+               RARCH_LOG("[Netplay] HB: \"%s\" keeps pace.\n",
+                     connection->nick);
+            }
+         }
+         break;
+
+      case NETPLAY_CMD_HB_SYNC:
+         {
+            /* HB: the peer's frame lead (see hb_netplay_sync_frame) */
+            uint32_t report[2];
+            bool have      = false;
+            unsigned char buf[64];
+
+            if (cmd_size >= sizeof(report))
+            {
+               RECV(report, sizeof(report))
+                  return false;
+               cmd_size -= sizeof(report);
+               have      = true;
+            }
+            while (cmd_size)
+            {
+               RECV(buf, (cmd_size > sizeof(buf)) ? sizeof(buf) : cmd_size)
+                  return false;
+               cmd_size -= recvd;
+            }
+
+            if (hb_netplay_private && have)
+            {
+               connection->hb_ahead_peer = (int32_t)ntohl(report[0]);
+               connection->hb_seen_peer  = ntohl(report[1]);
+               connection->flags        |= NETPLAY_CONN_FLAG_HB_REPORT;
+            }
          }
          break;
 
@@ -8589,13 +8691,36 @@ void input_poll_net(netplay_t *netplay)
    }
 }
 
+/**
+ * hb_netplay_sync_audio:
+ *
+ * HB: launcher rooms keep the sound of the frame that was run last - a
+ * frame that is sat out plays it once more (netplay_pre_frame).
+ */
+static void hb_netplay_sync_audio(const int16_t *data, size_t frames)
+{
+   if (!hb_netplay_private)
+      return;
+   if (hb_sync.audio_new)
+   {
+      hb_sync.audio_new = false;
+      hb_sync.audio_n   = 0;
+   }
+   if (frames > HB_SYNC_AUDIO - hb_sync.audio_n)
+      frames = HB_SYNC_AUDIO - hb_sync.audio_n;
+   memcpy(hb_sync_audio + 2 * hb_sync.audio_n, data,
+         frames * 2 * sizeof(int16_t));
+   hb_sync.audio_n += frames;
+}
+
 /* Netplay polling callbacks */
 void video_frame_net(const void *data, unsigned width,
       unsigned height, size_t pitch)
 {
    net_driver_state_t *net_st  = &networking_driver_st;
    netplay_t          *netplay = net_st->data;
-   if (!netplay_should_skip(netplay))
+   /* HB: nor the frame run on top to catch up */
+   if (!netplay_should_skip(netplay) && !hb_sync.muted)
       netplay->cbs.frame_cb(data, width, height, pitch);
 }
 
@@ -8603,16 +8728,25 @@ void audio_sample_net(int16_t left, int16_t right)
 {
    net_driver_state_t *net_st  = &networking_driver_st;
    netplay_t          *netplay = net_st->data;
-   if (!netplay_should_skip(netplay) && !netplay->stall)
+   if (!netplay_should_skip(netplay) && !netplay->stall && !hb_sync.muted)
+   {
+      int16_t pair[2];
+      pair[0] = left;
+      pair[1] = right;
+      hb_netplay_sync_audio(pair, 1);
       netplay->cbs.sample_cb(left, right);
+   }
 }
 
 size_t audio_sample_batch_net(const int16_t *data, size_t frames)
 {
    net_driver_state_t *net_st  = &networking_driver_st;
    netplay_t          *netplay = net_st->data;
-   if (!netplay_should_skip(netplay) && !netplay->stall)
+   if (!netplay_should_skip(netplay) && !netplay->stall && !hb_sync.muted)
+   {
+      hb_netplay_sync_audio(data, frames);
       return netplay->cbs.sample_batch_cb(data, frames);
+   }
    return frames;
 }
 
@@ -9054,7 +9188,7 @@ static void netplay_disconnect(netplay_t *netplay)
 static void hb_netplay_send_caps(netplay_t *netplay)
 {
    size_t i;
-   uint32_t caps = htonl(HB_NETPLAY_CAP_PAUSE);
+   uint32_t caps = htonl(HB_NETPLAY_CAP_PAUSE | HB_NETPLAY_CAP_SYNC);
 
    for (i = 0; i < netplay->connections_size; i++)
    {
@@ -9156,6 +9290,323 @@ static bool hb_netplay_paused_peer(netplay_t *netplay)
 }
 
 /**
+ * hb_netplay_sync_shift:
+ *
+ * HB: we stepped by @frames against every peer (-1 = sat a frame out,
+ * 1 = ran one more) - the windows are about the frames before.
+ */
+static void hb_netplay_sync_shift(netplay_t *netplay, int frames)
+{
+   size_t i;
+
+   for (i = 0; i < netplay->connections_size; i++)
+   {
+      struct netplay_connection *connection = &netplay->connections[i];
+      if (!(connection->flags & NETPLAY_CONN_FLAG_ACTIVE))
+         continue;
+      connection->hb_ahead_cur  += frames;
+      connection->hb_ahead_prev += frames;
+   }
+   hb_sync.step_tick = hb_sync.tick;
+}
+
+/**
+ * hb_netplay_sync_frame:
+ *
+ * HB: called before every frame of a launcher room. Measures how far we
+ * are ahead of the peers (see HB_SYNC_WINDOW above) and decides on a
+ * step: sit this frame out, or run one more after it (hb_sync.extra).
+ *
+ * Returns: true to sit this frame out.
+ */
+static bool hb_netplay_sync_frame(netplay_t *netplay)
+{
+   size_t i;
+   retro_time_t now;
+   int hold;
+   int hi2       = 0;     /* lead over the peer we are furthest ahead of */
+   int lo2       = 0;     /* ... and the one we are furthest behind */
+   int hi_est2   = 0;     /* what the ping says about the first (log) */
+   int hi_ping   = 0;
+   bool hi_est   = false; /* hi2 is from the ping */
+   bool lo_est   = false;
+   bool known    = false;
+   bool any      = false;
+   bool unknown  = false;
+
+   hb_sync.extra = false;
+
+   if (     netplay->modus     != NETPLAY_MODUS_INPUT_FRAME_SYNC
+         || netplay->self_mode != NETPLAY_CONNECTION_PLAYING
+         || netplay->remote_paused
+         || netplay->local_paused
+         || netplay->desync
+         || netplay->is_replay)
+   {
+      /* Not a frame like the others: start again after it. */
+      for (i = 0; i < netplay->connections_size; i++)
+      {
+         struct netplay_connection *connection = &netplay->connections[i];
+         connection->hb_ahead_n    = 0;
+         connection->hb_ahead_wins = 0;
+         connection->flags        &= ~NETPLAY_CONN_FLAG_HB_REPORT;
+      }
+      hb_sync.steps_n = 0;
+      return false;
+   }
+
+   hb_sync.tick++;
+
+   for (i = 0; i < netplay->connections_size; i++)
+   {
+      uint32_t seen;
+      int32_t ahead, mine;
+      int lead2, est2  = 0;
+      bool est         = false;
+      bool have_est    = false;
+      struct netplay_connection *connection = &netplay->connections[i];
+
+      if (!(connection->flags & NETPLAY_CONN_FLAG_ACTIVE))
+         continue;
+      if (netplay->is_server)
+      {
+         if (connection->mode != NETPLAY_CONNECTION_PLAYING)
+            continue;
+         seen = netplay->read_frame_count[i + 1];
+      }
+      else
+      {
+         /* The host forwards everybody's input. */
+         if (i || connection->mode < NETPLAY_CONNECTION_CONNECTED)
+            continue;
+         seen = netplay->server_frame_count;
+      }
+      any   = true;
+
+      ahead = (int32_t)netplay->run_frame_count - (int32_t)seen;
+      if (!connection->hb_ahead_n)
+      {
+         connection->hb_ahead_cur  = ahead;
+         connection->hb_seen_start = seen;
+      }
+      else if (ahead < connection->hb_ahead_cur)
+         connection->hb_ahead_cur  = ahead;
+      connection->hb_ahead_n++;
+
+      if (connection->hb_ahead_n >= HB_SYNC_WINDOW)
+      {
+         if (connection->flags & NETPLAY_CONN_FLAG_HB_SYNC)
+         {
+            uint32_t report[2];
+            report[0] = htonl((uint32_t)connection->hb_ahead_cur);
+            report[1] = htonl(connection->hb_seen_start);
+            netplay_send_raw_cmd(netplay, connection, NETPLAY_CMD_HB_SYNC,
+                  report, sizeof(report));
+         }
+         connection->hb_ahead_prev = connection->hb_ahead_cur;
+         connection->hb_ahead_n    = 0;
+         if (connection->hb_ahead_wins < 255)
+            connection->hb_ahead_wins++;
+         if (connection->ping >= 0)
+            connection->hb_ping16  = connection->hb_ping16
+               ? (connection->hb_ping16 * 7 + connection->ping * 16) / 8
+               : connection->ping * 16;
+      }
+
+      if (!connection->hb_ahead_wins)
+      {
+         unknown = true;
+         continue;
+      }
+      mine = connection->hb_ahead_prev;
+      if (connection->hb_ahead_n && connection->hb_ahead_cur < mine)
+         mine = connection->hb_ahead_cur;
+
+      /* From the ping: both ways together take about the ping, so when
+       * the two sides are level each is "ahead" by half of it, less the
+       * input latency frames (taken to be the same on both sides) - and
+       * less two frames: the input of a frame is sent before that frame
+       * is run and counts as one more frame had, and the ping waits for
+       * the next poll on both sides (measured between two peers that
+       * report: the ping alone said 2 to 3 frames less than they did).
+       * FIXME: 60 fps as elsewhere in this file. */
+      if (connection->hb_ping16 > 0)
+      {
+         est2     = 2 * mine
+            - ((connection->hb_ping16 * 60 + 8000) / 16000
+               - 2 * (int)netplay->input_latency_frames - 4);
+         have_est = true;
+      }
+
+      if (connection->flags & NETPLAY_CONN_FLAG_HB_SYNC)
+      {
+         unsigned k, n = hb_sync.steps_n < HB_SYNC_STEPS
+            ? hb_sync.steps_n : HB_SYNC_STEPS;
+         int late      = 0;
+
+         if (!(connection->flags & NETPLAY_CONN_FLAG_HB_REPORT))
+         {
+            unknown = true;
+            continue;
+         }
+         /* A frame we sat out puts the peer one more "ahead" - in a
+          * window that began after the input we sent before it. */
+         for (k = 0; k < n; k++)
+            if ((int32_t)(hb_sync.steps[k] + 1 - connection->hb_seen_peer) >= 0)
+               late++;
+         lead2 = mine - (connection->hb_ahead_peer + late);
+      }
+      else
+      {
+         if (!have_est)
+         {
+            unknown = true;
+            continue;
+         }
+         lead2 = est2;
+         est   = true;
+      }
+
+      if (!known || lead2 > hi2)
+      {
+         hi2     = lead2;
+         hi_est  = est;
+         hi_est2 = have_est ? est2 : lead2;
+         hi_ping = (connection->hb_ping16 + 8) / 16;
+      }
+      if (!known || lead2 < lo2)
+      {
+         lo2     = lead2;
+         lo_est  = est;
+      }
+      known = true;
+   }
+
+   if (!any || unknown || !known)
+      return false;
+
+   now = cpu_features_get_time_usec();
+   if (now - hb_sync.log_time >= HB_SYNC_LOG_USEC)
+   {
+      if (hb_sync.log_time)
+         RARCH_LOG("[Netplay] HB: lead %s%c%d.%d (ping says %c%d.%d, ping %d ms,"
+               " frame %u, skipped %u, caught up %u).\n",
+               hi_est ? "about " : "",
+               hi2 < 0 ? '-' : '+', abs(hi2) / 2, (hi2 & 1) ? 5 : 0,
+               hi_est2 < 0 ? '-' : '+', abs(hi_est2) / 2, (hi_est2 & 1) ? 5 : 0,
+               hi_ping, (unsigned)netplay->run_frame_count,
+               hb_sync.skipped, hb_sync.caught);
+      hb_sync.log_time = now;
+      hb_sync.skipped  = 0;
+      hb_sync.caught   = 0;
+   }
+
+   /* Stalled anyway (waiting for input, or a whole second ahead). */
+   if (netplay->stall)
+      return false;
+
+   /* Ahead of somebody: sit this frame out - the further ahead, the
+    * sooner after the last one. */
+   if (hi2 >= (hi_est ? HB_SYNC_LEAD_EST : HB_SYNC_LEAD))
+   {
+      hold = (hi2 < 4) ? HB_SYNC_HOLD : HB_SYNC_PACE / hi2;
+      if (hb_sync.tick - hb_sync.step_tick < (uint32_t)hold)
+         return false;
+      hb_netplay_sync_shift(netplay, -1);
+      hb_sync.steps[hb_sync.steps_n++ % HB_SYNC_STEPS] =
+         netplay->self_frame_count;
+      hb_sync.skipped++;
+      return true;
+   }
+
+   /* Behind a peer that does not sit out, and ahead of nobody: run one
+    * more frame after this one (netplay_hb_extra_frame). */
+   if (lo_est && lo2 <= -HB_SYNC_LEAD_EST && hi2 < 2)
+   {
+      if (now < hb_sync.extra_off)
+         return false;
+      hold = HB_SYNC_PACE / -lo2;
+      if (hold < HB_SYNC_EXTRA)
+         hold = HB_SYNC_EXTRA;
+      if (hb_sync.tick - hb_sync.step_tick < (uint32_t)hold)
+         return false;
+
+      if (!hb_sync.extra_run)
+         hb_sync.extra_lead2 = lo2;
+      else if (hb_sync.extra_run >= HB_SYNC_TRY)
+      {
+         /* That many frames should have brought us as many closer. A
+          * peer that runs unthrottled is always a second ahead of us
+          * (it waits for our input there): running after it would only
+          * make the game run fast. */
+         if (lo2 - hb_sync.extra_lead2 < HB_SYNC_TRY)
+         {
+            if (hb_sync.extra_fail < 5)
+               hb_sync.extra_fail++;
+            hb_sync.extra_off = now
+               + (HB_SYNC_OFF_USEC << (hb_sync.extra_fail - 1));
+            hb_sync.extra_run = 0;
+            RARCH_LOG("[Netplay] HB: catching up does not help (lead %c%d.%d),"
+                  " not for %d s.\n",
+                  lo2 < 0 ? '-' : '+', abs(lo2) / 2, (lo2 & 1) ? 5 : 0,
+                  (int)((HB_SYNC_OFF_USEC << (hb_sync.extra_fail - 1)) / 1000000));
+            return false;
+         }
+         hb_sync.extra_fail  = 0;
+         hb_sync.extra_run   = 0;
+         hb_sync.extra_lead2 = lo2;
+      }
+      hb_sync.extra = true;
+   }
+   else
+   {
+      /* Level again. */
+      if (hb_sync.extra_run && lo2 > -HB_SYNC_LEAD_EST)
+         hb_sync.extra_fail = 0;
+      hb_sync.extra_run = 0;
+   }
+
+   return false;
+}
+
+/**
+ * netplay_hb_extra_frame:
+ * @begin                : true before, false after that frame
+ *
+ * HB: the frame a launcher room runs on top to catch up, right after a
+ * frame (core_run). It is not shown and not heard.
+ *
+ * Returns: true (with @begin) to run it.
+ */
+bool netplay_hb_extra_frame(bool begin)
+{
+   netplay_t *netplay = networking_driver_st.data;
+
+   if (!begin)
+   {
+      hb_sync.muted = false;
+      return false;
+   }
+   /* Frames replayed inside a frame come this way too. */
+   if (!hb_sync.extra || hb_sync.muted || !netplay || netplay->is_replay)
+      return false;
+   hb_sync.extra = false;
+   if (     !hb_netplay_private
+         || netplay->modus     != NETPLAY_MODUS_INPUT_FRAME_SYNC
+         || netplay->self_mode != NETPLAY_CONNECTION_PLAYING
+         || netplay->stall
+         || netplay->remote_paused
+         || netplay->local_paused)
+      return false;
+
+   hb_netplay_sync_shift(netplay, 1);
+   hb_sync.caught++;
+   hb_sync.extra_run++;
+   hb_sync.muted = true;
+   return true;
+}
+
+/**
  * netplay_pre_frame:
  * @netplay              : pointer to netplay object
  *
@@ -9167,9 +9618,24 @@ static bool hb_netplay_paused_peer(netplay_t *netplay)
  **/
 static bool netplay_pre_frame(netplay_t *netplay)
 {
+   bool hb_sit_out = false;
+
    /* HB: launcher rooms - say what we can do, once per peer */
    if (hb_netplay_private)
+   {
       hb_netplay_send_caps(netplay);
+
+      /* The frame before was not run. With vsync off or threaded video
+       * (the audio is the clock then) nothing waited for it - the loop
+       * would spin, and a frame sat out would take no time at all. */
+      if (hb_sync.idle_time)
+      {
+         retro_time_t idle = cpu_features_get_time_usec() - hb_sync.idle_time;
+         hb_sync.idle_time = 0;
+         if (idle >= 0 && idle < HB_SYNC_FRAME_USEC - 2000)
+            retro_sleep((unsigned)((HB_SYNC_FRAME_USEC - idle) / 1000));
+      }
+   }
 
    /* FIXME: This is an ugly way to learn we're not paused anymore */
    if (netplay->local_paused)
@@ -9238,6 +9704,9 @@ static bool netplay_pre_frame(netplay_t *netplay)
          hb_pause_since = 0;
       else if (!hb_netplay_paused_peer(netplay))
          return true; /* gave up as a guest: netplay is gone */
+
+      /* ... and keep pace with the peers */
+      hb_sit_out = hb_netplay_sync_frame(netplay);
    }
 
    if ((netplay->stall || netplay->remote_paused)
@@ -9247,9 +9716,27 @@ static bool netplay_pre_frame(netplay_t *netplay)
       /* We may have received data even if we're stalled,
        * so run post-frame sync. */
       netplay_sync_input_post_frame(netplay, true);
+      if (hb_netplay_private)
+         hb_sync.idle_time = cpu_features_get_time_usec();
       return false;
    }
 
+   /* HB: ahead of the peers - this frame is not run, like a stall of one
+    * frame. It has to take the time of a frame: the sound of the last
+    * frame goes out once more (a device that runs by its audio would
+    * run the frame it lost right away otherwise), and the next
+    * pre-frame waits for what is left of the time. */
+   if (hb_sit_out)
+   {
+      hb_sync.idle_time = cpu_features_get_time_usec();
+      if (hb_sync.audio_n)
+         netplay->cbs.sample_batch_cb(hb_sync_audio, hb_sync.audio_n);
+      netplay_sync_input_post_frame(netplay, true);
+      return false;
+   }
+
+   if (hb_netplay_private)
+      hb_sync.audio_new = true;
    return true;
 }
 
@@ -9436,6 +9923,7 @@ bool init_netplay(const char *server, unsigned port, const char *mitm_session)
 
    net_st->data = netplay;
    hb_pause_since = 0;
+   memset(&hb_sync, 0, sizeof(hb_sync));
 
    if (netplay->is_server)
    {
